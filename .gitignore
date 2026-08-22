@@ -486,6 +486,16 @@ build-*/*
 petsc-build/*
 pkg.gitcommit
 
+# Python caches and generated study results
+__pycache__/
+*.py[cod]
+/python_script/mesh_refinement_results/
+/python_script/profiling_and_error_results/
+
+# Profiling output
+*.nsys-rep
+*.sqlite
+
 # Jupyter Notebook Checkpoints
 .ipynb_checkpoints
 
