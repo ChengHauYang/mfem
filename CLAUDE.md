@@ -35,3 +35,13 @@ singular; PCG diverges to ~1e28 even at order 1. Use `data/inline-hex.mesh`
     cd examples
     mpirun -np 8 ./ex1p -m ../data/inline-hex.mesh -o 4 -pa -a -d ceed-cpu -no-vis
     # 16,974,593 DOFs, Average reduction factor 0.216, ~2 min on 8 ranks
+
+## Visualization
+
+Use the `visualize_glvis` skill, or install GLVis directly:
+
+    cd scripts && ./install_glvis.sh
+    ../../bin/glvis -np 8 -m ../examples/mesh -g ../examples/sol
+
+The installer builds against this MFEM configuration and installs the executable
+at the package root's `bin/glvis`.
