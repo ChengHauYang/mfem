@@ -64,11 +64,19 @@
 //               optional connection to the GLVis tool for visualization.
 
 #include "mfem.hpp"
+#include <cstring>
 #include <fstream>
 #include <iostream>
 
 using namespace std;
 using namespace mfem;
+
+real_t sine_exact_solution(const Vector &x);
+real_t sine_rhs(const Vector &x);
+real_t multimode_exact_solution(const Vector &x);
+real_t multimode_rhs(const Vector &x);
+real_t bubble_exp_exact_solution(const Vector &x);
+real_t bubble_exp_rhs(const Vector &x);
 
 int main(int argc, char *argv[])
 {
@@ -79,14 +87,25 @@ int main(int argc, char *argv[])
    Hypre::Init();
 
    // 2. Parse command-line options.
-   const char *mesh_file = "../data/star.mesh";
-   int order = 1;
+   // const char *mesh_file = "../data/star.mesh";
+   const char *mesh_file = "../data/inline-quad.mesh";
+   // int order = 1;
+   int order = 6;
+   int serial_ref_levels = 0;
    bool static_cond = false;
-   bool pa = false;
+   // bool pa = false;
+   bool pa = true;
    bool fa = false;
-   const char *device_config = "cpu";
+   // const char *device_config = "cpu";
+   const char *device_config = "ceed-cpu";
    bool visualization = true;
-   bool algebraic_ceed = false;
+   bool paraview = true;
+   bool save_output = true;
+   bool l2_error = false;
+   const char *mms = "sine";
+   // bool algebraic_ceed = false;
+   bool algebraic_ceed = true;
+
 #ifdef MFEM_USE_CUDSS
    bool cudss_solver = false;
 #endif
@@ -97,6 +116,8 @@ int main(int argc, char *argv[])
    args.AddOption(&order, "-o", "--order",
                   "Finite element order (polynomial degree) or -1 for"
                   " isoparametric space.");
+   args.AddOption(&serial_ref_levels, "-rs", "--refine-serial",
+                  "Number of serial uniform refinements.");
    args.AddOption(&static_cond, "-sc", "--static-condensation", "-no-sc",
                   "--no-static-condensation", "Enable static condensation.");
    args.AddOption(&pa, "-pa", "--partial-assembly", "-no-pa",
@@ -117,12 +138,30 @@ int main(int argc, char *argv[])
    args.AddOption(&visualization, "-vis", "--visualization", "-no-vis",
                   "--no-visualization",
                   "Enable or disable GLVis visualization.");
+   args.AddOption(&paraview, "-pv", "--paraview", "-no-pv",
+                  "--no-paraview", "Enable or disable ParaView output.");
+   args.AddOption(&save_output, "-out", "--output", "-no-out",
+                  "--no-output", "Enable or disable mesh and solution output.");
+   args.AddOption(&l2_error, "-l2", "--l2-error", "-no-l2",
+                  "--no-l2-error",
+                  "Use a smooth unit-square manufactured solution and compute its L2 error.");
+   args.AddOption(&mms, "-mms", "--manufactured-solution",
+                  "Manufactured solution: sine, multimode, or bubble-exp.");
    args.Parse();
    if (!args.Good())
    {
       if (myid == 0)
       {
          args.PrintUsage(cout);
+      }
+      return 1;
+   }
+   if (strcmp(mms, "sine") != 0 && strcmp(mms, "multimode") != 0 &&
+       strcmp(mms, "bubble-exp") != 0)
+   {
+      if (myid == 0)
+      {
+         cerr << "Unknown manufactured solution: " << mms << endl;
       }
       return 1;
    }
@@ -134,7 +173,10 @@ int main(int argc, char *argv[])
    // 3. Enable hardware devices such as GPUs, and programming models such as
    //    CUDA, OCCA, RAJA and OpenMP based on command line options.
    Device device(device_config);
-   if (myid == 0) { device.Print(); }
+   if (myid == 0)
+   {
+      device.Print();
+   }
 
    // 4. Read the (serial) mesh from the given mesh file on all processors.  We
    //    can handle triangular, quadrilateral, tetrahedral, hexahedral, surface
@@ -142,31 +184,16 @@ int main(int argc, char *argv[])
    Mesh mesh(mesh_file, 1, 1);
    int dim = mesh.Dimension();
 
-   // 5. Refine the serial mesh on all processors to increase the resolution. In
-   //    this example we do 'ref_levels' of uniform refinement. We choose
-   //    'ref_levels' to be the largest number that gives a final mesh with no
-   //    more than 10,000 elements.
+   // 5. Refine the serial mesh on all processors to increase the resolution.
+   //    The number of uniform refinements is controlled by -rs.
+   for (int l = 0; l < serial_ref_levels; l++)
    {
-      int ref_levels =
-         (int)floor(log(10000./mesh.GetNE())/log(2.)/dim);
-      for (int l = 0; l < ref_levels; l++)
-      {
-         mesh.UniformRefinement();
-      }
+      mesh.UniformRefinement();
    }
 
-   // 6. Define a parallel mesh by a partitioning of the serial mesh. Refine
-   //    this mesh further in parallel to increase the resolution. Once the
-   //    parallel mesh is defined, the serial mesh can be deleted.
+   // 6. Define a parallel mesh by partitioning the serial mesh.
    ParMesh pmesh(MPI_COMM_WORLD, mesh);
    mesh.Clear();
-   {
-      int par_ref_levels = 2;
-      for (int l = 0; l < par_ref_levels; l++)
-      {
-         pmesh.UniformRefinement();
-      }
-   }
 
    // 7. Define a parallel finite element space on the parallel mesh. Here we
    //    use continuous Lagrange finite elements of the specified order.
@@ -174,8 +201,7 @@ int main(int argc, char *argv[])
    //    - If the mesh is simplicial and partial assembly is requested,
    //      we use the positive basis, which supports device execution.
    FiniteElementCollection *fec;
-   auto basis_type = (pa && pmesh.IsSimplexMesh()) ?
-                     BasisType::Positive : BasisType::GaussLobatto;
+   auto basis_type = (pa && pmesh.IsSimplexMesh()) ? BasisType::Positive : BasisType::GaussLobatto;
    if (order > 0)
    {
       fec = new H1_FECollection(order, dim, basis_type);
@@ -221,7 +247,19 @@ int main(int argc, char *argv[])
    //    (1,phi_i) where phi_i are the basis functions in fespace.
    ParLinearForm b(&fespace);
    ConstantCoefficient one(1.0);
-   b.AddDomainIntegrator(new DomainLFIntegrator(one));
+   FunctionCoefficient sine_load(sine_rhs);
+   FunctionCoefficient multimode_load(multimode_rhs);
+   FunctionCoefficient bubble_exp_load(bubble_exp_rhs);
+   Coefficient *rhs = &one;
+   if (l2_error)
+   {
+      rhs = strcmp(mms, "multimode") == 0 ?
+            static_cast<Coefficient *>(&multimode_load) :
+            strcmp(mms, "bubble-exp") == 0 ?
+            static_cast<Coefficient *>(&bubble_exp_load) :
+            static_cast<Coefficient *>(&sine_load);
+   }
+   b.AddDomainIntegrator(new DomainLFIntegrator(*rhs));
    b.Assemble();
 
    // 10. Define the solution vector x as a parallel finite element grid
@@ -234,7 +272,10 @@ int main(int argc, char *argv[])
    //     corresponding to the Laplacian operator -Delta, by adding the
    //     Diffusion domain integrator.
    ParBilinearForm a(&fespace);
-   if (pa) { a.SetAssemblyLevel(AssemblyLevel::PARTIAL); }
+   if (pa)
+   {
+      a.SetAssemblyLevel(AssemblyLevel::PARTIAL);
+   }
    if (fa)
    {
       a.SetAssemblyLevel(AssemblyLevel::FULL);
@@ -249,7 +290,10 @@ int main(int argc, char *argv[])
    //     system, applying any necessary transformations such as: parallel
    //     assembly, eliminating boundary conditions, applying conforming
    //     constraints for non-conforming AMR, static condensation, etc.
-   if (static_cond) { a.EnableStaticCondensation(); }
+   if (static_cond)
+   {
+      a.EnableStaticCondensation();
+   }
    a.Assemble();
 
    OperatorPtr A;
@@ -258,14 +302,17 @@ int main(int argc, char *argv[])
 
    // 13. Solve the linear system A X = B.
    //     * With full assembly, use the BoomerAMG preconditioner from hypre.
-   //     * With partial assembly, use Jacobi smoothing, for now.
-#ifdef MFEM_USE_CUDSS
+   //     * With partial assembly, use Jacobi smoothing or CEED algebraic AMG.
+   MPI_Barrier(MPI_COMM_WORLD);
+   const double solve_start = MPI_Wtime();
+ #ifdef MFEM_USE_CUDSS
+
    if (!pa && (Device::Allows(Backend::CUDA_MASK) && cudss_solver))
    {
       // Solve using a direct solver with cuDSS
       CuDSSSolver cudss_solver(MPI_COMM_WORLD);
       cudss_solver.SetMatrixSymType(
-         CuDSSSolver::SYMMETRIC_POSITIVE_DEFINITE);
+          CuDSSSolver::SYMMETRIC_POSITIVE_DEFINITE);
       cudss_solver.SetMatrixViewType(CuDSSSolver::UPPER);
       cudss_solver.SetOperator(*A);
       cudss_solver.Mult(B, X);
@@ -280,6 +327,7 @@ int main(int argc, char *argv[])
          {
             if (algebraic_ceed)
             {
+               // Use algebraic multigrid preconditioner from CEED
                prec = new ceed::AlgebraicSolver(a, ess_tdof_list);
             }
             else
@@ -302,15 +350,46 @@ int main(int argc, char *argv[])
       }
       cg.SetOperator(*A);
       cg.Mult(B, X);
+      if (myid == 0)
+      {
+         cout << "CG iterations: " << cg.GetNumIterations() << endl;
+      }
       delete prec;
+   }
+   const double local_solve_time = MPI_Wtime() - solve_start;
+   double solve_time = 0.0;
+   MPI_Reduce(&local_solve_time, &solve_time, 1, MPI_DOUBLE, MPI_MAX, 0,
+              MPI_COMM_WORLD);
+   if (myid == 0)
+   {
+      cout << "Solver setup and solve time: " << setprecision(16)
+           << solve_time << endl;
    }
 
    // 14. Recover the parallel grid function corresponding to X. This is the
    //     local finite element solution on each processor.
    a.RecoverFEMSolution(X, b, x);
 
+   if (l2_error)
+   {
+      FunctionCoefficient sine_solution(sine_exact_solution);
+      FunctionCoefficient multimode_solution(multimode_exact_solution);
+      FunctionCoefficient bubble_exp_solution(bubble_exp_exact_solution);
+      Coefficient *exact_solution = strcmp(mms, "multimode") == 0 ?
+                                    static_cast<Coefficient *>(&multimode_solution) :
+                                    strcmp(mms, "bubble-exp") == 0 ?
+                                    static_cast<Coefficient *>(&bubble_exp_solution) :
+                                    static_cast<Coefficient *>(&sine_solution);
+      const real_t error = x.ComputeL2Error(*exact_solution);
+      if (myid == 0)
+      {
+         cout << "L2 norm of error: " << setprecision(16) << error << endl;
+      }
+   }
+
    // 15. Save the refined mesh and the solution in parallel. This output can
    //     be viewed later using GLVis: "glvis -np <np> -m mesh -g sol".
+   if (save_output)
    {
       ostringstream mesh_name, sol_name;
       mesh_name << "mesh." << setfill('0') << setw(6) << myid;
@@ -325,19 +404,81 @@ int main(int argc, char *argv[])
       x.Save(sol_ofs);
    }
 
-   // 16. Send the solution by socket to a GLVis server.
+   // 16. Optionally save the solution in ParaView format.
+   if (paraview)
+   {
+      ParaViewDataCollection paraview_dc("Example1P", &pmesh);
+      paraview_dc.SetPrefixPath("ParaView");
+      if (order > 0)
+      {
+         paraview_dc.SetLevelsOfDetail(order);
+      }
+      paraview_dc.SetDataFormat(VTKFormat::BINARY);
+      paraview_dc.SetHighOrderOutput(true);
+      paraview_dc.SetCycle(0);
+      paraview_dc.SetTime(0.0);
+      paraview_dc.RegisterField("solution", &x);
+      paraview_dc.Save();
+   }
+
+   // 17. Send the solution by socket to a GLVis server.
    if (visualization)
    {
       char vishost[] = "localhost";
-      int  visport   = 19916;
+      int visport = 19916;
       socketstream sol_sock(vishost, visport);
       sol_sock << "parallel " << num_procs << " " << myid << "\n";
       sol_sock.precision(8);
-      sol_sock << "solution\n" << pmesh << x << flush;
+      sol_sock << "solution\n"
+               << pmesh << x << flush;
    }
 
-   // 17. Free the used memory.
-   if (order > 0) { delete fec; }
+   // 18. Free the used memory.
+   if (order > 0)
+   {
+      delete fec;
+   }
 
    return 0;
+}
+
+real_t sine_exact_solution(const Vector &x)
+{
+   return sin(M_PI * x[0]) * sin(M_PI * x[1]);
+}
+
+real_t sine_rhs(const Vector &x)
+{
+   return 2.0 * M_PI * M_PI * sine_exact_solution(x);
+}
+
+real_t multimode_exact_solution(const Vector &x)
+{
+   return sine_exact_solution(x) +
+          0.1 * sin(3.0 * M_PI * x[0]) * sin(2.0 * M_PI * x[1]) +
+          0.01 * sin(7.0 * M_PI * x[0]) * sin(5.0 * M_PI * x[1]);
+}
+
+real_t multimode_rhs(const Vector &x)
+{
+   return sine_rhs(x) +
+          1.3 * M_PI * M_PI * sin(3.0 * M_PI * x[0]) *
+          sin(2.0 * M_PI * x[1]) +
+          0.74 * M_PI * M_PI * sin(7.0 * M_PI * x[0]) *
+          sin(5.0 * M_PI * x[1]);
+}
+
+real_t bubble_exp_exact_solution(const Vector &x)
+{
+   return exp(x[0] + x[1]) * x[0] * (1.0 - x[0]) *
+          x[1] * (1.0 - x[1]);
+}
+
+real_t bubble_exp_rhs(const Vector &x)
+{
+   const real_t gx = x[0] * (1.0 - x[0]);
+   const real_t gy = x[1] * (1.0 - x[1]);
+   return exp(x[0] + x[1]) *
+          ((3.0 * x[0] + x[0] * x[0]) * gy +
+           gx * (3.0 * x[1] + x[1] * x[1]));
 }
