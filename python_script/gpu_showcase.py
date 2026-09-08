@@ -79,14 +79,14 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def case_name(order: int, solver: str) -> str:
-    return f"p{order} {SOLVERS[solver]['label']}"
+def case_name(order: int, size: int, solver: str) -> str:
+    return f"p{order} {SOLVERS[solver]['label']} (n={size})"
 
 
 def convert_result(result: ProfileResult) -> ShowcaseResult:
     hierarchy = "Q6 -> Q3 -> Q1 -> Q3 -> Q6" if result.solver == "ceed-amg" else "n/a"
     return ShowcaseResult(
-        case=case_name(result.order, result.solver),
+        case=case_name(result.order, result.n, result.solver),
         hierarchy=hierarchy,
         device=result.device,
         solver=result.solver,
