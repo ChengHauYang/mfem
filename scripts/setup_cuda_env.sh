@@ -23,7 +23,11 @@
 #                       linker cannot pick up fenicsx's MPICH libmpi.so.12,
 #                       which would shadow the OpenMPI hypre was built with.
 #        hostbin/    -- provides `g++` -> `g++-11` (Ubuntu ships only g++-11);
-#                       required by OpenMPI's mpicxx wrapper.
+#                       required by OpenMPI's mpicxx wrapper. Also provides
+#                       `python`/`python3` -> the conda env's python so that
+#                       python_script/*.py finds matplotlib + numpy without
+#                       activating the full env (which would put MPICH on
+#                       PATH and shadow OpenMPI).
 #   4. Exports CUDA_HOME, CUDA_DIR, PATH, LD_LIBRARY_PATH, CUDA_ARCH,
 #      METIS_DIR, OMPI_CXX, OMPI_CC.
 #
@@ -49,6 +53,8 @@ _MFEM_CUDA_TARGETS="${_MFEM_CUDA_ENV_DIR}/targets/x86_64-linux"
 _die() { echo "setup_cuda_env.sh: $*" >&2; return 1; }
 [ -x "${_MFEM_CUDA_ENV_DIR}/bin/nvcc" ]              || _die "no nvcc in ${_MFEM_CUDA_ENV_DIR}/bin (set MFEM_CUDA_ENV)" || return 1
 [ -x "${_MFEM_CUDA_ENV_DIR}/bin/cudafe++" ]          || _die "no cudafe++ in ${_MFEM_CUDA_ENV_DIR}/bin" || return 1
+[ -x "${_MFEM_CUDA_ENV_DIR}/bin/python3" ]           || _die "no python3 in ${_MFEM_CUDA_ENV_DIR}/bin" || return 1
+"${_MFEM_CUDA_ENV_DIR}/bin/python3" -c "import matplotlib, numpy" 2>/dev/null || _die "matplotlib+numpy missing in ${MFEM_CUDA_ENV} env" || return 1
 [ -f "${_MFEM_CUDA_TARGETS}/include/cuda_runtime.h" ] || _die "no CUDA headers in ${_MFEM_CUDA_TARGETS}/include" || return 1
 [ -f "${_MFEM_CUDA_ENV_DIR}/lib/libmetis.so" ]       || _die "no libmetis.so in ${_MFEM_CUDA_ENV_DIR}/lib" || return 1
 [ -f "${_MFEM_CUDA_ENV_DIR}/include/metis.h" ]       || _die "no metis.h in ${_MFEM_CUDA_ENV_DIR}/include" || return 1
@@ -82,6 +88,8 @@ _SHIM_HOSTBIN="${MFEM_CUDA_SHIM_ROOT}/hostbin"
 mkdir -p "${_SHIM_HOSTBIN}"
 ln -sfn /usr/bin/g++-11 "${_SHIM_HOSTBIN}/g++"
 ln -sfn /usr/bin/g++-11 "${_SHIM_HOSTBIN}/c++"
+ln -sfn "${_MFEM_CUDA_ENV_DIR}/bin/python3" "${_SHIM_HOSTBIN}/python3"
+ln -sfn "${_MFEM_CUDA_ENV_DIR}/bin/python3" "${_SHIM_HOSTBIN}/python"
 
 # --- exports -----------------------------------------------------------------
 export CUDA_HOME="${_SHIM_CUDA}"
@@ -106,6 +114,7 @@ echo "setup_cuda_env: CUDA_HOME=${CUDA_HOME}"
 echo "setup_cuda_env: METIS_DIR=${METIS_DIR}"
 echo "setup_cuda_env: CUDA_ARCH=${CUDA_ARCH}  nvcc=$(nvcc --version | tail -1)"
 echo "setup_cuda_env: nvrtc runtime=$(readlink -f ${MFEM_CUDA_TOOLKIT}/lib64/libnvrtc.so.12)"
+echo "setup_cuda_env: python3=$(readlink -f $(command -v python3))"
 
 unset _MFEM_CUDA_ENV_DIR _MFEM_CUDA_TARGETS _SHIM_CUDA _SHIM_METIS _SHIM_HOSTBIN _LD_ADD
 unset -f _die
