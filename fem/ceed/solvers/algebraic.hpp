@@ -166,7 +166,8 @@ public:
    AlgebraicMultigrid(
       AlgebraicSpaceHierarchy &hierarchy,
       BilinearForm &form,
-      const Array<int> &ess_tdofs
+      const Array<int> &ess_tdofs,
+      bool use_assembled_coarse_solver = false
    );
    virtual void SetOperator(const mfem::Operator &op) override { }
    ~AlgebraicMultigrid();
@@ -197,8 +198,11 @@ public:
 
        @param[in] form      partially assembled BilinearForm on finest level
        @param[in] ess_tdofs List of essential true dofs on finest level
+       @param[in] use_assembled_coarse_solver Use BoomerAMG on the coarsest
+                  level instead of the matrix-free Chebyshev smoother.
     */
-   AlgebraicSolver(BilinearForm &form, const Array<int>& ess_tdofs);
+   AlgebraicSolver(BilinearForm &form, const Array<int>& ess_tdofs,
+                   bool use_assembled_coarse_solver = false);
    ~AlgebraicSolver();
    void Mult(const Vector& x, Vector& y) const;
    void SetOperator(const mfem::Operator& op);

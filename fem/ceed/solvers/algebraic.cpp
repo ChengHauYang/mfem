@@ -299,7 +299,8 @@ CeedOperator CoarsenCeedCompositeOperator(
 AlgebraicMultigrid::AlgebraicMultigrid(
    AlgebraicSpaceHierarchy &hierarchy,
    BilinearForm &form,
-   const Array<int> &ess_tdofs
+   const Array<int> &ess_tdofs,
+   bool use_assembled_coarse_solver
 ) : GeometricMultigrid(hierarchy, Array<int>())
 {
    int nlevels = fespaces.GetNumLevels();
@@ -333,7 +334,8 @@ AlgebraicMultigrid::AlgebraicMultigrid(
          ceed_operators[ilevel], *essentialTrueDofs[ilevel], P);
       Solver *smoother;
 #ifdef MFEM_USE_MPI
-      if (ilevel == 0 && !Device::Allows(Backend::CUDA))
+      if (ilevel == 0 &&
+          (use_assembled_coarse_solver || !Device::Allows(Backend::CUDA)))
       {
          HypreParMatrix *P_mat = NULL;
          if (nlevels == 1)
@@ -943,7 +945,8 @@ ParAlgebraicCoarseSpace::~ParAlgebraicCoarseSpace()
 #endif // MFEM_USE_CEED
 
 AlgebraicSolver::AlgebraicSolver(BilinearForm &form,
-                                 const Array<int>& ess_tdofs)
+                                 const Array<int>& ess_tdofs,
+                                 bool use_assembled_coarse_solver)
 {
    MFEM_VERIFY(DeviceCanUseCeed(),
                "AlgebraicSolver requires a Ceed device");
@@ -954,7 +957,8 @@ AlgebraicSolver::AlgebraicSolver(BilinearForm &form,
                "AlgebraicSolver requires tensor product basis functions.");
 #ifdef MFEM_USE_CEED
    fespaces = new AlgebraicSpaceHierarchy(*form.FESpace());
-   multigrid = new AlgebraicMultigrid(*fespaces, form, ess_tdofs);
+   multigrid = new AlgebraicMultigrid(*fespaces, form, ess_tdofs,
+                                      use_assembled_coarse_solver);
 #else
    MFEM_ABORT("AlgebraicSolver requires Ceed support");
 #endif

@@ -107,6 +107,7 @@ int main(int argc, char *argv[])
    int profile_repeats = 0;
    // bool algebraic_ceed = false;
    bool algebraic_ceed = true;
+   bool ceed_assembled_coarse_solver = false;
 
 #ifdef MFEM_USE_CUDSS
    bool cudss_solver = false;
@@ -132,6 +133,10 @@ int main(int argc, char *argv[])
    args.AddOption(&algebraic_ceed, "-a", "--algebraic",
                   "-no-a", "--no-algebraic",
                   "Use algebraic Ceed solver");
+   args.AddOption(&ceed_assembled_coarse_solver,
+                  "-ac", "--assembled-coarse-solver",
+                  "-no-ac", "--no-assembled-coarse-solver",
+                  "Use assembled BoomerAMG on the coarsest CEED AMG level.");
 #endif
 #ifdef MFEM_USE_CUDSS
    args.AddOption(&cudss_solver, "-cudss", "--cudss-solver", "-no-cudss",
@@ -372,7 +377,8 @@ int main(int argc, char *argv[])
             if (algebraic_ceed)
             {
                // Use algebraic multigrid preconditioner from CEED
-               prec = new ceed::AlgebraicSolver(a, ess_tdof_list);
+               prec = new ceed::AlgebraicSolver(
+                         a, ess_tdof_list, ceed_assembled_coarse_solver);
             }
             else
             {

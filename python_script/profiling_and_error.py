@@ -87,6 +87,7 @@ def run_once(
     order: int,
     size: int,
     repeats: int,
+    extra_flags: tuple[str, ...] = (),
 ) -> tuple[int, float, int, list[int], dict[str, float], list[float]]:
     mesh_path = case_dir / "inline-quad.mesh"
     write_inline_quad(mesh_path, size)
@@ -113,6 +114,7 @@ def run_once(
         mms,
         "-pr",
         str(repeats),
+        *extra_flags,
     ]
     process = subprocess.run(command, cwd=case_dir, text=True, capture_output=True)
     output = process.stdout + process.stderr
@@ -174,6 +176,7 @@ def profile_case(
     order: int,
     size: int,
     repeats: int,
+    extra_flags: tuple[str, ...] = (),
 ) -> tuple[ProfileResult, list[tuple[int, float]]]:
     case_dir = work_dir / device / solver / f"order{order}" / f"n{size:04d}"
     case_dir.mkdir(parents=True, exist_ok=True)
@@ -184,7 +187,8 @@ def profile_case(
     )
 
     dofs, l2_error, warmup_iterations, steady_iterations, timings, steady_times = run_once(
-        executable, case_dir, mpi_ranks, device, solver, mms, order, size, repeats
+        executable, case_dir, mpi_ranks, device, solver, mms, order, size, repeats,
+        extra_flags,
     )
     steady_solve = statistics.median(steady_times)
     solve_total = timings["warmup"] + steady_solve
