@@ -47,17 +47,27 @@ auto-selects `cpu+cuda` when `nvidia-smi` reports a GPU:
     python python_script/profiling_and_error.py                # cpu + cuda
     python python_script/profiling_and_error.py --devices cuda # gpu only
 
-CPU/GPU rows are plotted on the same time-vs-error chart, distinguished by
+CPU/GPU rows are plotted on the same time-vs-error charts, distinguished by
 line style (solid = CPU, dashed = CUDA) with solver marker and order colour
-carried over from the CPU-only plots.
+carried over from the CPU-only plots. Each case now runs once and profiles
+non-overlapping cold-start, operator-assembly, preconditioner-setup, first-solve,
+and repeated-solve phases in the same process. The outputs are:
+
+- `solve_time_vs_error.png`: first-solve time plus median repeated-solve time.
+- `assembly_setup_solve_time_vs_error.png`: cold start, assembly, setup,
+  first solve, and median repeated solve added together.
+
+The summary CSV retains every independent phase as well as both aggregate
+values, so the components can be inspected without inferring them from a plot.
 
 ## Latest sweep
 
 Output tree under `python_script/profiling_and_error_results/` (gitignored):
 
-    profiling_summary.csv    205 rows: orders 1-7, sizes per DEFAULT_SIZES_BY_ORDER
-    profiling_samples.csv    per-run raw timings (3 repeats each)
-    time_vs_error.png        CPU vs GPU time-to-accuracy plot
+    profiling_summary.csv                 independent phases and aggregate times
+    profiling_samples.csv                 same-process steady-solve samples
+    solve_time_vs_error.png               first + median repeated solve
+    assembly_setup_solve_time_vs_error.png all profiled phases added together
 
 Coverage:
 
@@ -70,9 +80,11 @@ Five `cuda / ceed-amg` cases were skipped by the runner: `p=4 n=2`,
 `p=4 n=4`, `p=5 n=4`, `p=6 n=4`, `p=7 n=4` — a cluster at `n=4` for
 `p >= 4`, not the "higher orders" pattern I first assumed. Not yet diagnosed.
 
-## Timing snapshot (median setup + solve, seconds)
+## Legacy timing snapshot (setup + first solve, seconds)
 
-Three repeats each; median reported. `n` is elements per side of the 2D
+These values predate the independent-phase profiler above and should not be
+compared directly with its new aggregate columns. Three separate process runs
+were used for each median. `n` is elements per side of the 2D
 inline-quad mesh, DOFs is `p*n+1` squared. L2 error is the manufactured
 solution error and is device-independent (rows share it across CPU/GPU).
 

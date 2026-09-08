@@ -59,10 +59,15 @@ class ProfileResult:
     h: float
     dofs: int
     l2_error: float
-    iterations: int
-    median_seconds: float
-    min_seconds: float
-    max_seconds: float
+    warmup_iterations: int
+    steady_iterations: int
+    cold_start_seconds: float
+    assembly_seconds: float
+    setup_seconds: float
+    warmup_solve_seconds: float
+    steady_solve_seconds: float
+    solve_total_seconds: float
+    assembly_setup_solve_total_seconds: float
 
 
 def write_inline_quad(path: Path, size: int) -> None:
@@ -81,8 +86,8 @@ def run_once(
     mms: str,
     order: int,
     size: int,
-    run: int,
-) -> tuple[int, float, int, float]:
+    repeats: int,
+) -> tuple[int, float, int, list[int], dict[str, float], list[float]]:
     mesh_path = case_dir / "inline-quad.mesh"
     write_inline_quad(mesh_path, size)
     device_backend = DEVICES[device][SOLVERS[solver]["family"]]
@@ -106,29 +111,56 @@ def run_once(
         "-l2",
         "-mms",
         mms,
+        "-pr",
+        str(repeats),
     ]
     process = subprocess.run(command, cwd=case_dir, text=True, capture_output=True)
     output = process.stdout + process.stderr
     if process.returncode:
         raise RuntimeError(
-            f"{device}/{solver}, order={order}, n={size}, run={run} failed:\n{output}"
+            f"{device}/{solver}, order={order}, n={size} failed:\n{output}"
         )
 
     dofs = re.search(r"Number of finite element unknowns: (\d+)", process.stdout)
     error = re.search(r"L2 norm of error: ([0-9.eE+-]+)", process.stdout)
-    iterations = re.search(r"CG iterations: (\d+)", process.stdout)
-    elapsed = re.search(
-        r"Solver setup and solve time: ([0-9.eE+-]+)", process.stdout
-    )
-    if not dofs or not error or not iterations or not elapsed:
+    warmup_iterations = re.search(r"^CG iterations: (\d+)$", process.stdout, re.MULTILINE)
+    steady_iterations = [
+        int(value)
+        for value in re.findall(r"Steady-state CG iterations: (\d+)", process.stdout)
+    ]
+    labels = {
+        "cold_start": "Cold start time",
+        "assembly": "Operator assembly time",
+        "setup": "Preconditioner setup time",
+        "warmup": "Warm-up solve time",
+    }
+    timings = {}
+    for key, label in labels.items():
+        match = re.search(rf"{re.escape(label)}: ([0-9.eE+-]+)", process.stdout)
+        if match:
+            timings[key] = float(match.group(1))
+    steady_times = [
+        float(value)
+        for value in re.findall(r"Steady-state solve time: ([0-9.eE+-]+)", process.stdout)
+    ]
+    if (
+        not dofs
+        or not error
+        or not warmup_iterations
+        or len(timings) != len(labels)
+        or len(steady_times) != repeats
+        or len(steady_iterations) != repeats
+    ):
         raise RuntimeError(
-            f"could not parse {device}/{solver}, order={order}, n={size}, run={run}:\n{output}"
+            f"could not parse {device}/{solver}, order={order}, n={size}:\n{output}"
         )
     return (
         int(dofs.group(1)),
         float(error.group(1)),
-        int(iterations.group(1)),
-        float(elapsed.group(1)),
+        int(warmup_iterations.group(1)),
+        steady_iterations,
+        timings,
+        steady_times,
     )
 
 
@@ -151,18 +183,17 @@ def profile_case(
         flush=True,
     )
 
-    # Warm up dynamic libraries, kernels, and allocator state before timing samples.
-    run_once(executable, case_dir, mpi_ranks, device, solver, mms, order, size, 0)
-    samples = []
-    iteration_samples = []
-    dofs = 0
-    l2_error = 0.0
-    for run in range(1, repeats + 1):
-        dofs, l2_error, iterations, elapsed = run_once(
-            executable, case_dir, mpi_ranks, device, solver, mms, order, size, run
-        )
-        samples.append(elapsed)
-        iteration_samples.append(iterations)
+    dofs, l2_error, warmup_iterations, steady_iterations, timings, steady_times = run_once(
+        executable, case_dir, mpi_ranks, device, solver, mms, order, size, repeats
+    )
+    steady_solve = statistics.median(steady_times)
+    solve_total = timings["warmup"] + steady_solve
+    full_total = (
+        timings["cold_start"]
+        + timings["assembly"]
+        + timings["setup"]
+        + solve_total
+    )
 
     return (
         ProfileResult(
@@ -174,12 +205,17 @@ def profile_case(
             h=1.0 / size,
             dofs=dofs,
             l2_error=l2_error,
-            iterations=round(statistics.median(iteration_samples)),
-            median_seconds=statistics.median(samples),
-            min_seconds=min(samples),
-            max_seconds=max(samples),
+            warmup_iterations=warmup_iterations,
+            steady_iterations=round(statistics.median(steady_iterations)),
+            cold_start_seconds=timings["cold_start"],
+            assembly_seconds=timings["assembly"],
+            setup_seconds=timings["setup"],
+            warmup_solve_seconds=timings["warmup"],
+            steady_solve_seconds=steady_solve,
+            solve_total_seconds=solve_total,
+            assembly_setup_solve_total_seconds=full_total,
         ),
-        list(zip(iteration_samples, samples)),
+        list(zip(steady_iterations, steady_times)),
     )
 
 
@@ -190,7 +226,9 @@ def write_csv(rows: list[object], path: Path) -> None:
         writer.writerows(asdict(row) for row in rows)
 
 
-def write_plot(results: list[ProfileResult], path: Path) -> None:
+def write_plot(
+    results: list[ProfileResult], path: Path, time_field: str, x_label: str
+) -> None:
     # Fall back to matplotlib's mathtext when no system LaTeX is installed
     # (system where this runs may not have texlive).
     plt.rc("text", usetex=shutil.which("latex") is not None)
@@ -218,7 +256,7 @@ def write_plot(results: list[ProfileResult], path: Path) -> None:
                 if not series:
                     continue
                 axis.loglog(
-                    [result.median_seconds for result in series],
+                    [getattr(result, time_field) for result in series],
                     [result.l2_error for result in series],
                     linestyle=device_linestyles[device],
                     marker=marker,
@@ -279,7 +317,7 @@ def write_plot(results: list[ProfileResult], path: Path) -> None:
             title_fontsize=11,
             loc="lower right",
         )
-    axis.set_xlabel(r"$\mathrm{Preconditioner setup + CG solve time (s)}$", fontsize=14)
+    axis.set_xlabel(x_label, fontsize=14)
     axis.set_ylabel(r"$L^2\mathrm{ error}$", fontsize=14)
     axis.set_title(r"$\mathrm{Time-to-Accuracy Comparison}$", fontsize=17)
     axis.grid(which="major", color="0.75", linewidth=0.8)
@@ -398,21 +436,38 @@ def main() -> None:
 
     summary_path = args.output / "profiling_summary.csv"
     raw_path = args.output / "profiling_samples.csv"
-    plot_path = args.output / "time_vs_error.png"
+    solve_plot_path = args.output / "solve_time_vs_error.png"
+    full_plot_path = args.output / "assembly_setup_solve_time_vs_error.png"
     write_csv(results, summary_path)
     write_csv(raw_rows, raw_path)
-    write_plot(results, plot_path)
+    write_plot(
+        results,
+        solve_plot_path,
+        "solve_total_seconds",
+        r"$\mathrm{Warm\!-\!up\ solve + steady\!-\!state\ solve\ time\ (s)}$",
+    )
+    write_plot(
+        results,
+        full_plot_path,
+        "assembly_setup_solve_total_seconds",
+        r"$\mathrm{Cold\ start + assembly + setup + warm\!-\!up + steady\ solve\ (s)}$",
+    )
 
-    print("\nMedian setup + solve times (seconds):")
+    print("\nIndependent phase and aggregate times (seconds):")
     for result in results:
         print(
             f"{DEVICES[result.device]['label']:11s} {result.solver:11s} "
             f"p={result.order} n={result.n:3d} "
-            f"time={result.median_seconds:.6e} error={result.l2_error:.6e}"
+            f"cold={result.cold_start_seconds:.3e} "
+            f"assembly={result.assembly_seconds:.3e} setup={result.setup_seconds:.3e} "
+            f"warmup={result.warmup_solve_seconds:.3e} "
+            f"steady={result.steady_solve_seconds:.3e} "
+            f"error={result.l2_error:.6e}"
         )
-    print(f"Summary: {summary_path}")
-    print(f"Samples: {raw_path}")
-    print(f"Plot:    {plot_path}")
+    print(f"Summary:    {summary_path}")
+    print(f"Samples:    {raw_path}")
+    print(f"Solve plot: {solve_plot_path}")
+    print(f"Full plot:  {full_plot_path}")
     if skipped:
         print(f"\nSkipped {len(skipped)} configuration(s):")
         for device, solver, order, size, reason in skipped:

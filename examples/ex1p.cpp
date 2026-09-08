@@ -82,6 +82,7 @@ int main(int argc, char *argv[])
 {
    // 1. Initialize MPI and HYPRE.
    Mpi::Init();
+   const double cold_start_begin = MPI_Wtime();
    int num_procs = Mpi::WorldSize();
    int myid = Mpi::WorldRank();
    Hypre::Init();
@@ -103,6 +104,7 @@ int main(int argc, char *argv[])
    bool save_output = true;
    bool l2_error = false;
    const char *mms = "sine";
+   int profile_repeats = 0;
    // bool algebraic_ceed = false;
    bool algebraic_ceed = true;
 
@@ -147,6 +149,8 @@ int main(int argc, char *argv[])
                   "Use a smooth unit-square manufactured solution and compute its L2 error.");
    args.AddOption(&mms, "-mms", "--manufactured-solution",
                   "Manufactured solution: sine, multimode, or bubble-exp.");
+   args.AddOption(&profile_repeats, "-pr", "--profile-repeats",
+                  "Number of additional same-process solves to profile.");
    args.Parse();
    if (!args.Good())
    {
@@ -165,6 +169,14 @@ int main(int argc, char *argv[])
       }
       return 1;
    }
+   if (profile_repeats < 0)
+   {
+      if (myid == 0)
+      {
+         cerr << "Profile repeats must be non-negative." << endl;
+      }
+      return 1;
+   }
    if (myid == 0)
    {
       args.PrintOptions(cout);
@@ -177,6 +189,7 @@ int main(int argc, char *argv[])
    {
       device.Print();
    }
+   const double cold_start_seconds = MPI_Wtime() - cold_start_begin;
 
    // 4. Read the (serial) mesh from the given mesh file on all processors.  We
    //    can handle triangular, quadrilateral, tetrahedral, hexahedral, surface
@@ -286,6 +299,9 @@ int main(int argc, char *argv[])
    }
    a.AddDomainIntegrator(new DiffusionIntegrator(one));
 
+   MPI_Barrier(MPI_COMM_WORLD);
+   const double assembly_begin = MPI_Wtime();
+
    // 12. Assemble the parallel bilinear form and the corresponding linear
    //     system, applying any necessary transformations such as: parallel
    //     assembly, eliminating boundary conditions, applying conforming
@@ -299,27 +315,55 @@ int main(int argc, char *argv[])
    OperatorPtr A;
    Vector B, X;
    a.FormLinearSystem(ess_tdof_list, x, b, A, X, B);
+   MPI_Barrier(MPI_COMM_WORLD);
+   const double assembly_seconds = MPI_Wtime() - assembly_begin;
+
+   auto print_max_time = [myid](const char *label, double local_time)
+   {
+      double max_time = 0.0;
+      MPI_Reduce(&local_time, &max_time, 1, MPI_DOUBLE, MPI_MAX, 0,
+                 MPI_COMM_WORLD);
+      if (myid == 0)
+      {
+         cout << label << setprecision(16) << max_time << endl;
+      }
+   };
+   print_max_time("Cold start time: ", cold_start_seconds);
+   print_max_time("Operator assembly time: ", assembly_seconds);
 
    // 13. Solve the linear system A X = B.
    //     * With full assembly, use the BoomerAMG preconditioner from hypre.
    //     * With partial assembly, use Jacobi smoothing or CEED algebraic AMG.
-   MPI_Barrier(MPI_COMM_WORLD);
-   const double solve_start = MPI_Wtime();
- #ifdef MFEM_USE_CUDSS
+  #ifdef MFEM_USE_CUDSS
 
    if (!pa && (Device::Allows(Backend::CUDA_MASK) && cudss_solver))
    {
-      // Solve using a direct solver with cuDSS
-      CuDSSSolver cudss_solver(MPI_COMM_WORLD);
-      cudss_solver.SetMatrixSymType(
-          CuDSSSolver::SYMMETRIC_POSITIVE_DEFINITE);
-      cudss_solver.SetMatrixViewType(CuDSSSolver::UPPER);
-      cudss_solver.SetOperator(*A);
-      cudss_solver.Mult(B, X);
+      MPI_Barrier(MPI_COMM_WORLD);
+      const double setup_begin = MPI_Wtime();
+      CuDSSSolver cudss(MPI_COMM_WORLD);
+      cudss.SetMatrixSymType(CuDSSSolver::SYMMETRIC_POSITIVE_DEFINITE);
+      cudss.SetMatrixViewType(CuDSSSolver::UPPER);
+      cudss.SetOperator(*A);
+      print_max_time("Preconditioner setup time: ", MPI_Wtime() - setup_begin);
+
+      MPI_Barrier(MPI_COMM_WORLD);
+      const double warmup_begin = MPI_Wtime();
+      cudss.Mult(B, X);
+      print_max_time("Warm-up solve time: ", MPI_Wtime() - warmup_begin);
+      for (int repeat = 0; repeat < profile_repeats; repeat++)
+      {
+         X = 0.0;
+         MPI_Barrier(MPI_COMM_WORLD);
+         const double repeat_begin = MPI_Wtime();
+         cudss.Mult(B, X);
+         print_max_time("Steady-state solve time: ", MPI_Wtime() - repeat_begin);
+      }
    }
    else
-#endif
+ #endif
    {
+      MPI_Barrier(MPI_COMM_WORLD);
+      const double setup_begin = MPI_Wtime();
       Solver *prec = NULL;
       if (pa)
       {
@@ -349,22 +393,31 @@ int main(int argc, char *argv[])
          cg.SetPreconditioner(*prec);
       }
       cg.SetOperator(*A);
+      print_max_time("Preconditioner setup time: ", MPI_Wtime() - setup_begin);
+
+      MPI_Barrier(MPI_COMM_WORLD);
+      const double warmup_begin = MPI_Wtime();
       cg.Mult(B, X);
+      print_max_time("Warm-up solve time: ", MPI_Wtime() - warmup_begin);
       if (myid == 0)
       {
          cout << "CG iterations: " << cg.GetNumIterations() << endl;
       }
+      for (int repeat = 0; repeat < profile_repeats; repeat++)
+      {
+         X = 0.0;
+         MPI_Barrier(MPI_COMM_WORLD);
+         const double repeat_begin = MPI_Wtime();
+         cg.Mult(B, X);
+         print_max_time("Steady-state solve time: ", MPI_Wtime() - repeat_begin);
+         if (myid == 0)
+         {
+            cout << "Steady-state CG iterations: " << cg.GetNumIterations() << endl;
+         }
+      }
       delete prec;
    }
-   const double local_solve_time = MPI_Wtime() - solve_start;
-   double solve_time = 0.0;
-   MPI_Reduce(&local_solve_time, &solve_time, 1, MPI_DOUBLE, MPI_MAX, 0,
-              MPI_COMM_WORLD);
-   if (myid == 0)
-   {
-      cout << "Solver setup and solve time: " << setprecision(16)
-           << solve_time << endl;
-   }
+
 
    // 14. Recover the parallel grid function corresponding to X. This is the
    //     local finite element solution on each processor.
