@@ -33,8 +33,73 @@ MPICH 4.3.2, hypre v2.32.0, libCEED v0.12.0, METIS 5.1.0 (brew).
 
     cd mfem/scripts && ./build_mfem.sh cpu
 
-CUDA path is **written but NOT verified** -- no CUDA machine was available.
-Expect to debug it on first use; see "CUDA unknowns" below.
+CUDA build verified 2026-08-22, `mom-01` (Ubuntu 22.04, 2x RTX A5000 sm_86,
+driver 550.54.15 = CUDA 12.4), OpenMPI 4.1, hypre v2.32.0, libCEED v0.12.0,
+METIS 5.1.0 + nvcc 12.9 from the miniforge `fenicsx` conda env, driver-matching
+libnvrtc.so.12.4.127 from `/usr/local/cuda-12.4/lib64`.
+
+    cd mfem/scripts
+    source ./setup_cuda_env.sh                # env vars + shim dirs
+    ./build_mfem.sh cuda                      # ~15 min from cold
+
+Then, for anything that invokes `ex1p` on the GPU (including the profiling
+script), re-source `setup_cuda_env.sh` once per shell:
+
+    source ./setup_cuda_env.sh
+    cd ../examples
+    mpirun -np 1 ./ex1p -m ../data/inline-hex.mesh -o 4 -pa -a -d ceed-cuda -no-vis
+
+## CUDA build on this machine: what the setup script is fixing
+
+The `mom-01` box has an unusual toolchain layout that hit four distinct
+failures during the first bring-up. `setup_cuda_env.sh` codifies the fixes;
+this section explains why each one is there so the recipe can be adapted if
+another cluster looks different.
+
+1. **`nvcc` cannot find its helpers.** The fenicsx env keeps `nvcc` at
+   `bin/nvcc` and the helpers (`cudafe++`, `cicc`, `ptxas`, `fatbinary`,
+   `nvcc.profile`, `crt/link.stub`) also under `bin/`. Its
+   `targets/x86_64-linux/bin/nvcc` is a relative symlink up to `bin/nvcc`;
+   invoking that path leaves `_HERE_ = targets/x86_64-linux/bin/`, and
+   nvcc.profile's `TOP` expansion never reaches the helpers. Symptom:
+   `sh: 1: cudafe++: not found` mid-hypre-build. Fix: build a shim
+   `CUDA_HOME=/tmp/pae_build/cuda_home/` whose `bin/` contains absolute
+   symlinks to nvcc **and** every helper it launches, plus a `crt/` symlink.
+
+2. **OpenMPI's `mpicxx` needs a bare `g++`.** Ubuntu 22.04 installs only
+   `/usr/bin/g++-11`; there is no unversioned `g++`. OpenMPI's wrapper hard-
+   codes the underlying compiler at build time and errors out with
+   "Open MPI wrapper compiler was unable to find the specified compiler g++
+   in your PATH." Fix: `OMPI_CXX=g++-11 OMPI_CC=gcc-11`, plus a `g++ ->
+   g++-11` alias in a private `hostbin/` on PATH so anything that shells out
+   to bare `g++` (nvcc's own device-link stage) also resolves.
+
+3. **METIS_DIR must not expose the conda env's MPI libs.** Setting
+   `METIS_DIR=$FE` puts `-L$FE/lib` on the link line, and `$FE/lib` also
+   contains fenicsx's MPICH (`libmpi.so -> libmpi.so.12`). The linker resolves
+   `-lmpi` from that first, shadowing the OpenMPI 4.x hypre was configured
+   against. Symptom: `libmpi.so.40, needed by libmpi_cxx.so, may conflict
+   with libmpi.so.12` followed by hundreds of `undefined reference to
+   ompi_mpi_int/ompi_mpi_op_max/...`. Fix: build a shim
+   `METIS_DIR=/tmp/pae_build/metis/` with **only** `libmetis.so` + `metis.h`
+   symlinked, so `-L` cannot reach any MPI library.
+
+4. **Driver-matching libnvrtc for runtime JIT.** The driver on this box is
+   550.54.15 (CUDA 12.4); the fenicsx nvcc is 12.9, so the libnvrtc bundled
+   with it emits PTX 8.5 which the driver rejects at runtime with
+   `CUDA_ERROR_UNSUPPORTED_PTX_VERSION` the first time libCEED JITs a kernel.
+   Compiling MFEM/hypre works either way (they emit SASS for sm_86), but any
+   `-d ceed-cuda` run dies inside `CeedCompile_Cuda`. Fix: prepend
+   `/usr/local/cuda-12.4/lib64` to `LD_LIBRARY_PATH` so `dlopen("libnvrtc
+   .so.12")` picks the 12.4 runtime the driver knows how to load. The
+   compile-time nvcc stays 12.9; only the runtime JIT is downgraded.
+
+The `config/config.hpp` that `make config` "loses" is not lost -- it is a
+checked-in stub. Never delete it during a manual clean.
+
+**Do not merge these fixes into `build_mfem.sh`.** That script is verified on
+the Mac; changing it risks breaking the CPU path. Machine-specific shims live
+in `setup_cuda_env.sh`, which is only sourced on Linux boxes that need it.
 
 ## Working run
 
