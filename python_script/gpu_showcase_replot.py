@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Re-render the GPU showcase PNGs from an existing gpu_showcase.csv.
+
+Reads the CSV produced by gpu_showcase.py and overwrites
+gpu_showcase.png and gpu_showcase_phases.png in the same directory
+with a layout that does not overlap the tallest bars with the legend
+or the per-bar value labels. Does not re-run any simulation.
+"""
+
+import argparse
+import csv
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+DEVICE_LABEL = {"cpu": "CPU", "cuda": "GPU (CUDA)"}
+DEVICE_COLOR = {"cpu": "#315b7d", "cuda": "#e36b3d"}
+PHASES = (
+    ("cold_start_seconds", "Cold start", "#61788a"),
+    ("assembly_seconds", "Assembly", "#94a89a"),
+    ("setup_seconds", "Setup", "#d6a84b"),
+    ("warmup_solve_seconds", "Warm-up solve", "#dc7653"),
+    ("steady_solve_seconds", "Steady solve", "#7a5195"),
+)
+
+
+def load_rows(csv_path: Path) -> list[dict]:
+    with csv_path.open() as stream:
+        return list(csv.DictReader(stream))
+
+
+def write_comparison_plot(rows: list[dict], path: Path) -> None:
+    cases = list(dict.fromkeys(row["case"] for row in rows))
+    metrics = (
+        ("steady_solve_seconds", "Steady-state solve"),
+        ("assembly_setup_solve_total_seconds",
+         "Cold + assembly + setup + two solves"),
+    )
+    by_key = {(row["case"], row["device"]): row for row in rows}
+    figure, axes = plt.subplots(1, 2, figsize=(14, 6.2), dpi=100)
+    x = np.arange(len(cases))
+    width = 0.36
+
+    for axis, (field, title) in zip(axes, metrics):
+        all_values: list[float] = []
+        for index, device in enumerate(("cpu", "cuda")):
+            values = [float(by_key[(case, device)][field]) for case in cases]
+            all_values.extend(values)
+            offset = (index - 0.5) * width
+            bars = axis.bar(
+                x + offset, values, width,
+                label=DEVICE_LABEL[device], color=DEVICE_COLOR[device],
+            )
+            for bar, value in zip(bars, values):
+                axis.annotate(
+                    f"{value:.3g}s",
+                    (bar.get_x() + bar.get_width() / 2, value),
+                    xytext=(0, 3), textcoords="offset points",
+                    ha="center", va="bottom", fontsize=8, rotation=90,
+                )
+        for case_index, case in enumerate(cases):
+            cpu = float(by_key[(case, "cpu")][field])
+            cuda = float(by_key[(case, "cuda")][field])
+            axis.text(
+                case_index, max(cpu, cuda) * 3.0,
+                f"{cpu / cuda:.1f}x",
+                ha="center", va="bottom", fontweight="bold", fontsize=9,
+            )
+        axis.set_yscale("log")
+        # Headroom above the "1.5x" annotations (which sit at max*3) so the
+        # legend at the figure top has room to breathe.
+        axis.set_ylim(top=max(all_values) * 20.0)
+        axis.set_title(title)
+        axis.set_xticks(x, cases, rotation=18, ha="right")
+        axis.set_ylabel("Time (seconds, log scale)")
+        axis.grid(axis="y", which="both", linestyle=":", alpha=0.5)
+
+    figure.suptitle(
+        "MFEM GPU Showcase (labels show CPU / GPU speedup)", fontsize=15, y=0.995,
+    )
+    # One shared legend, above the axes and below the suptitle, so it never
+    # overlaps the tallest CPU bars in either subplot.
+    handles = [
+        plt.Rectangle((0, 0), 1, 1, color=DEVICE_COLOR[d]) for d in ("cpu", "cuda")
+    ]
+    figure.legend(
+        handles, [DEVICE_LABEL[d] for d in ("cpu", "cuda")],
+        loc="upper center", ncols=2, bbox_to_anchor=(0.5, 0.955),
+        frameon=False, fontsize=11,
+    )
+    figure.tight_layout(rect=(0, 0, 1, 0.93))
+    figure.savefig(path, dpi=300, bbox_inches="tight")
+    plt.close(figure)
+
+
+def write_phase_plot(rows: list[dict], path: Path) -> None:
+    labels = [f"{row['case']}\n{DEVICE_LABEL[row['device']]}" for row in rows]
+    figure, axis = plt.subplots(figsize=(14, 6.4), dpi=100)
+    x = np.arange(len(rows))
+    bottom = np.zeros(len(rows))
+    totals = np.zeros(len(rows))
+    for field, label, color in PHASES:
+        values = np.array([float(row[field]) for row in rows])
+        axis.bar(x, values, bottom=bottom, label=label, color=color)
+        bottom += values
+        totals += values
+
+    for xi, total in zip(x, totals):
+        axis.annotate(
+            f"{total:.3g}s",
+            (xi, total), xytext=(0, 3), textcoords="offset points",
+            ha="center", va="bottom", fontsize=8,
+        )
+    axis.set_ylim(top=totals.max() * 1.15)
+    axis.set_xticks(x, labels, rotation=25, ha="right")
+    axis.set_ylabel("Time (seconds)")
+    axis.set_title("Independent Profiling Phases")
+    axis.grid(axis="y", linestyle=":", alpha=0.5)
+    # Legend below the plot so it can never occlude the tallest stack
+    # (p1 PA Jacobi CPU is ~100s tall on this axis).
+    axis.legend(
+        ncols=len(PHASES), loc="upper center",
+        bbox_to_anchor=(0.5, -0.22), frameon=False,
+    )
+    figure.tight_layout()
+    figure.savefig(path, dpi=300, bbox_inches="tight")
+    plt.close(figure)
+
+
+def parse_args() -> argparse.Namespace:
+    default_dir = Path(__file__).resolve().parent / "gpu_showcase_results"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--input", type=Path, default=default_dir / "gpu_showcase.csv",
+        help="path to gpu_showcase.csv (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--comparison-out", type=Path, default=None,
+        help="output PNG for the comparison plot "
+             "(default: <input dir>/gpu_showcase.png)",
+    )
+    parser.add_argument(
+        "--phases-out", type=Path, default=None,
+        help="output PNG for the phases plot "
+             "(default: <input dir>/gpu_showcase_phases.png)",
+    )
+    args = parser.parse_args()
+    args.input = args.input.resolve()
+    if not args.input.is_file():
+        parser.error(f"input CSV not found: {args.input}")
+    parent = args.input.parent
+    args.comparison_out = (args.comparison_out or parent / "gpu_showcase.png").resolve()
+    args.phases_out = (args.phases_out or parent / "gpu_showcase_phases.png").resolve()
+    return args
+
+
+def main() -> None:
+    args = parse_args()
+    rows = load_rows(args.input)
+    if not rows:
+        raise SystemExit(f"no rows in {args.input}")
+    write_comparison_plot(rows, args.comparison_out)
+    write_phase_plot(rows, args.phases_out)
+    print(f"Comparison: {args.comparison_out}")
+    print(f"Phases:     {args.phases_out}")
+
+
+if __name__ == "__main__":
+    main()
