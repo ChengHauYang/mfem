@@ -20,8 +20,7 @@ PHASES = (
     ("cold_start_seconds", "Cold start", "#61788a"),
     ("assembly_seconds", "Assembly", "#94a89a"),
     ("setup_seconds", "Setup", "#d6a84b"),
-    ("warmup_solve_seconds", "Warm-up solve", "#dc7653"),
-    ("steady_solve_seconds", "Steady solve", "#7a5195"),
+    ("warmup_solve_seconds", "First solve", "#dc7653"),
 )
 
 
@@ -34,8 +33,7 @@ def write_comparison_plot(rows: list[dict], path: Path) -> None:
     cases = list(dict.fromkeys(row["case"] for row in rows))
     metrics = (
         ("steady_solve_seconds", "Steady-state solve"),
-        ("assembly_setup_solve_total_seconds",
-         "Cold + assembly + setup + two solves"),
+        ("first_run", "Cold + assembly + setup + first solve"),
     )
     by_key = {(row["case"], row["device"]): row for row in rows}
     figure, axes = plt.subplots(1, 2, figsize=(14, 6.2), dpi=100)
@@ -45,7 +43,23 @@ def write_comparison_plot(rows: list[dict], path: Path) -> None:
     for axis, (field, title) in zip(axes, metrics):
         all_values: list[float] = []
         for index, device in enumerate(("cpu", "cuda")):
-            values = [float(by_key[(case, device)][field]) for case in cases]
+            values = []
+            for case in cases:
+                row = by_key[(case, device)]
+                value = (
+                    sum(
+                        float(row[name])
+                        for name in (
+                            "cold_start_seconds",
+                            "assembly_seconds",
+                            "setup_seconds",
+                            "warmup_solve_seconds",
+                        )
+                    )
+                    if field == "first_run"
+                    else float(row[field])
+                )
+                values.append(value)
             all_values.extend(values)
             offset = (index - 0.5) * width
             bars = axis.bar(
@@ -60,8 +74,24 @@ def write_comparison_plot(rows: list[dict], path: Path) -> None:
                     ha="center", va="bottom", fontsize=8, rotation=90,
                 )
         for case_index, case in enumerate(cases):
-            cpu = float(by_key[(case, "cpu")][field])
-            cuda = float(by_key[(case, "cuda")][field])
+            values = []
+            for device in ("cpu", "cuda"):
+                row = by_key[(case, device)]
+                value = (
+                    sum(
+                        float(row[name])
+                        for name in (
+                            "cold_start_seconds",
+                            "assembly_seconds",
+                            "setup_seconds",
+                            "warmup_solve_seconds",
+                        )
+                    )
+                    if field == "first_run"
+                    else float(row[field])
+                )
+                values.append(value)
+            cpu, cuda = values
             axis.text(
                 case_index, max(cpu, cuda) * 3.0,
                 f"{cpu / cuda:.1f}x",

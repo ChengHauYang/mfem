@@ -117,7 +117,7 @@ def write_comparison_plot(results: list[ShowcaseResult], path: Path) -> None:
     cases = list(dict.fromkeys(result.case for result in results))
     metrics = (
         ("steady_solve_seconds", "Steady-state solve"),
-        ("assembly_setup_solve_total_seconds", "Cold + assembly + setup + two solves"),
+        ("assembly_setup_solve_total_seconds", "Cold + assembly + setup + first solve"),
     )
     colors = {"cpu": "#315b7d", "cuda": "#e36b3d"}
     figure, axes = plt.subplots(1, 2, figsize=(14, 5.5), dpi=100)
@@ -178,8 +178,7 @@ def write_phase_plot(results: list[ShowcaseResult], path: Path) -> None:
         ("cold_start_seconds", "Cold start", "#61788a"),
         ("assembly_seconds", "Assembly", "#94a89a"),
         ("setup_seconds", "Setup", "#d6a84b"),
-        ("warmup_solve_seconds", "Warm-up solve", "#dc7653"),
-        ("steady_solve_seconds", "Steady solve", "#7a5195"),
+        ("warmup_solve_seconds", "First solve", "#dc7653"),
     )
     figure, axis = plt.subplots(figsize=(14, 6), dpi=100)
     x = np.arange(len(results))
