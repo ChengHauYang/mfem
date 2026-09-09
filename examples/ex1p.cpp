@@ -48,6 +48,13 @@
 //               mpirun -np 4 ex1p -pa -d gpu -m ../data/inline-tet.mesh
 //               mpirun -np 4 ex1p -pa -d gpu -m ../data/inline-tri.mesh
 //
+// Built-in Cartesian mesh and manufactured solution runs (-dim 2|3 replaces -m
+// with the unit square / unit cube that the manufactured solutions live on):
+//               mpirun -np 8 ex1p -dim 3 -n 16 -o 3 -l2 -mms sine -no-vis -no-pv -no-out
+//               mpirun -np 8 ex1p -dim 3 -n 24 -o 4 -l2 -mms bubble-exp -pa -d ceed-cpu -a
+//               mpirun -np 8 ex1p -dim 3 -n 64 -o 1 -l2 -mms multimode -no-pa
+//               mpirun -np 8 ex1p -dim 2 -n 128 -o 6 -l2 -mms multimode
+//
 // Description:  This example code demonstrates the use of MFEM to define a
 //               simple finite element discretization of the Poisson problem
 //               -Delta u = 1 with homogeneous Dirichlet boundary conditions.
@@ -93,6 +100,8 @@ int main(int argc, char *argv[])
    // int order = 1;
    int order = 6;
    int serial_ref_levels = 0;
+   int mesh_dim = 0;
+   int cells_per_direction = 16;
    bool static_cond = false;
    // bool pa = false;
    bool pa = true;
@@ -121,6 +130,12 @@ int main(int argc, char *argv[])
                   " isoparametric space.");
    args.AddOption(&serial_ref_levels, "-rs", "--refine-serial",
                   "Number of serial uniform refinements.");
+   args.AddOption(&mesh_dim, "-dim", "--dimension",
+                  "Build a Cartesian mesh of the unit square (2, quads) or of"
+                  " the unit cube (3, hexes) instead of reading --mesh;"
+                  " 0 (default) reads the mesh file.");
+   args.AddOption(&cells_per_direction, "-n", "--cells-per-direction",
+                  "Cells per direction of the built-in Cartesian mesh.");
    args.AddOption(&static_cond, "-sc", "--static-condensation", "-no-sc",
                   "--no-static-condensation", "Enable static condensation.");
    args.AddOption(&pa, "-pa", "--partial-assembly", "-no-pa",
@@ -151,7 +166,8 @@ int main(int argc, char *argv[])
                   "--no-output", "Enable or disable mesh and solution output.");
    args.AddOption(&l2_error, "-l2", "--l2-error", "-no-l2",
                   "--no-l2-error",
-                  "Use a smooth unit-square manufactured solution and compute its L2 error.");
+                  "Use a smooth manufactured solution on the unit square/cube"
+                  " and compute its L2 error.");
    args.AddOption(&mms, "-mms", "--manufactured-solution",
                   "Manufactured solution: sine, multimode, or bubble-exp.");
    args.AddOption(&profile_repeats, "-pr", "--profile-repeats",
@@ -171,6 +187,22 @@ int main(int argc, char *argv[])
       if (myid == 0)
       {
          cerr << "Unknown manufactured solution: " << mms << endl;
+      }
+      return 1;
+   }
+   if (mesh_dim != 0 && mesh_dim != 2 && mesh_dim != 3)
+   {
+      if (myid == 0)
+      {
+         cerr << "Dimension must be 0 (read --mesh), 2 or 3." << endl;
+      }
+      return 1;
+   }
+   if (mesh_dim != 0 && cells_per_direction <= 0)
+   {
+      if (myid == 0)
+      {
+         cerr << "Cells per direction must be positive." << endl;
       }
       return 1;
    }
@@ -196,10 +228,25 @@ int main(int argc, char *argv[])
    }
    const double cold_start_seconds = MPI_Wtime() - cold_start_begin;
 
-   // 4. Read the (serial) mesh from the given mesh file on all processors.  We
-   //    can handle triangular, quadrilateral, tetrahedral, hexahedral, surface
-   //    and volume meshes with the same code.
-   Mesh mesh(mesh_file, 1, 1);
+   // 4. Build the (serial) mesh on all processors. With -dim 2 or -dim 3 we
+   //    generate a Cartesian mesh of the unit square or the unit cube, which is
+   //    the domain the manufactured solutions below are defined on; -dim 3 is
+   //    the cheapest way to reach large DOF counts. Otherwise we read the mesh
+   //    from the given mesh file: we can handle triangular, quadrilateral,
+   //    tetrahedral, hexahedral, surface and volume meshes with the same code.
+   Mesh mesh = [&]() -> Mesh
+   {
+      const int n = cells_per_direction;
+      if (mesh_dim == 3)
+      {
+         return Mesh::MakeCartesian3D(n, n, n, Element::HEXAHEDRON);
+      }
+      if (mesh_dim == 2)
+      {
+         return Mesh::MakeCartesian2D(n, n, Element::QUADRILATERAL);
+      }
+      return Mesh(mesh_file, 1, 1);
+   }();
    int dim = mesh.Dimension();
 
    // 5. Refine the serial mesh on all processors to increase the resolution.
@@ -501,43 +548,127 @@ int main(int argc, char *argv[])
    return 0;
 }
 
+// The manufactured solutions below are written for any dimension: each one is
+// a product over the coordinates that vanishes on the whole boundary of the
+// unit square (2D) or the unit cube (3D), so it matches the homogeneous
+// Dirichlet conditions imposed above. In 2D they reduce to the original 2D
+// definitions.
+
+namespace
+{
+
+// A separable sine mode, amplitude * prod_i sin(k_i * pi * x_i).
+struct SineMode
+{
+   real_t amplitude;
+   int wave_numbers[3];
+};
+
+real_t sine_mode_value(const SineMode &mode, const Vector &x)
+{
+   real_t value = mode.amplitude;
+   for (int i = 0; i < x.Size(); i++)
+   {
+      value *= sin(mode.wave_numbers[i] * M_PI * x[i]);
+   }
+   return value;
+}
+
+// -Delta of a sine mode is pi^2 * (sum_i k_i^2) times the mode itself.
+real_t sine_mode_load(const SineMode &mode, const Vector &x)
+{
+   int wave_numbers_squared = 0;
+   for (int i = 0; i < x.Size(); i++)
+   {
+      wave_numbers_squared += mode.wave_numbers[i] * mode.wave_numbers[i];
+   }
+   return wave_numbers_squared * M_PI * M_PI * sine_mode_value(mode, x);
+}
+
+const SineMode fundamental_mode = {1.0, {1, 1, 1}};
+
+// The trailing wave number is only read in 3D, so in 2D these are the same
+// three modes as before.
+const SineMode multimode_modes[] =
+{
+   {1.0, {1, 1, 1}}, {0.1, {3, 2, 1}}, {0.01, {7, 5, 3}}
+};
+
+// The bubble g(s) = s * (1 - s) vanishes at s = 0 and s = 1.
+real_t bubble(real_t s)
+{
+   return s * (1.0 - s);
+}
+
+} // namespace
+
 real_t sine_exact_solution(const Vector &x)
 {
-   return sin(M_PI * x[0]) * sin(M_PI * x[1]);
+   return sine_mode_value(fundamental_mode, x);
 }
 
 real_t sine_rhs(const Vector &x)
 {
-   return 2.0 * M_PI * M_PI * sine_exact_solution(x);
+   return sine_mode_load(fundamental_mode, x);
 }
 
 real_t multimode_exact_solution(const Vector &x)
 {
-   return sine_exact_solution(x) +
-          0.1 * sin(3.0 * M_PI * x[0]) * sin(2.0 * M_PI * x[1]) +
-          0.01 * sin(7.0 * M_PI * x[0]) * sin(5.0 * M_PI * x[1]);
+   real_t value = 0.0;
+   for (const SineMode &mode : multimode_modes)
+   {
+      value += sine_mode_value(mode, x);
+   }
+   return value;
 }
 
 real_t multimode_rhs(const Vector &x)
 {
-   return sine_rhs(x) +
-          1.3 * M_PI * M_PI * sin(3.0 * M_PI * x[0]) *
-          sin(2.0 * M_PI * x[1]) +
-          0.74 * M_PI * M_PI * sin(7.0 * M_PI * x[0]) *
-          sin(5.0 * M_PI * x[1]);
+   real_t value = 0.0;
+   for (const SineMode &mode : multimode_modes)
+   {
+      value += sine_mode_load(mode, x);
+   }
+   return value;
 }
 
+// u = exp(sum_i x_i) * prod_i g(x_i).
 real_t bubble_exp_exact_solution(const Vector &x)
 {
-   return exp(x[0] + x[1]) * x[0] * (1.0 - x[0]) *
-          x[1] * (1.0 - x[1]);
+   real_t exponent = 0.0;
+   real_t product = 1.0;
+   for (int i = 0; i < x.Size(); i++)
+   {
+      exponent += x[i];
+      product *= bubble(x[i]);
+   }
+   return exp(exponent) * product;
 }
 
+// Differentiating twice picks up (g + 2g' + g'')(s) = -(s^2 + 3s) in each
+// direction, so -Delta u is
+// exp(sum_i x_i) * sum_i (3*x_i + x_i^2) * prod_{j != i} g(x_j).
 real_t bubble_exp_rhs(const Vector &x)
 {
-   const real_t gx = x[0] * (1.0 - x[0]);
-   const real_t gy = x[1] * (1.0 - x[1]);
-   return exp(x[0] + x[1]) *
-          ((3.0 * x[0] + x[0] * x[0]) * gy +
-           gx * (3.0 * x[1] + x[1] * x[1]));
+   const int dim = x.Size();
+   real_t exponent = 0.0;
+   for (int i = 0; i < dim; i++)
+   {
+      exponent += x[i];
+   }
+
+   real_t load = 0.0;
+   for (int i = 0; i < dim; i++)
+   {
+      real_t term = 3.0 * x[i] + x[i] * x[i];
+      for (int j = 0; j < dim; j++)
+      {
+         if (j != i)
+         {
+            term *= bubble(x[j]);
+         }
+      }
+      load += term;
+   }
+   return exp(exponent) * load;
 }
