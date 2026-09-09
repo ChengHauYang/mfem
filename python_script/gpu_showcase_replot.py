@@ -17,10 +17,14 @@ import numpy as np
 DEVICE_LABEL = {"cpu": "CPU", "cuda": "GPU (CUDA)"}
 DEVICE_COLOR = {"cpu": "#315b7d", "cuda": "#e36b3d"}
 PHASES = (
-    ("cold_start_seconds", "Cold start", "#61788a"),
-    ("assembly_seconds", "Assembly", "#94a89a"),
-    ("setup_seconds", "Setup", "#d6a84b"),
-    ("warmup_solve_seconds", "First solve", "#dc7653"),
+    ("cold_start_seconds", "Early initialization", "#61788a"),
+    (
+        "assembly_seconds",
+        "Operator construction (incl. GPU first use)",
+        "#94a89a",
+    ),
+    ("setup_seconds", "Preconditioner setup", "#d6a84b"),
+    ("warmup_solve_seconds", "Initial solve (all CG iterations)", "#dc7653"),
 )
 
 
@@ -32,8 +36,8 @@ def load_rows(csv_path: Path) -> list[dict]:
 def write_comparison_plot(rows: list[dict], path: Path) -> None:
     cases = list(dict.fromkeys(row["case"] for row in rows))
     metrics = (
-        ("steady_solve_seconds", "Steady-state solve"),
-        ("first_run", "Cold + assembly + setup + first solve"),
+        ("steady_solve_seconds", "Median repeated solve (all CG iterations)"),
+        ("first_run", "Profiled setup + initial solve (all CG iterations)"),
     )
     by_key = {(row["case"], row["device"]): row for row in rows}
     figure, axes = plt.subplots(1, 2, figsize=(14, 6.2), dpi=100)
@@ -92,14 +96,19 @@ def write_comparison_plot(rows: list[dict], path: Path) -> None:
                 )
                 values.append(value)
             cpu, cuda = values
+            speedup = cpu / cuda
+            comparison = (
+                f"{speedup:.1f}x faster"
+                if speedup >= 1.0
+                else f"{1.0 / speedup:.1f}x slower"
+            )
             axis.text(
                 case_index, max(cpu, cuda) * 3.0,
-                f"{cpu / cuda:.1f}x",
+                comparison,
                 ha="center", va="bottom", fontweight="bold", fontsize=9,
             )
         axis.set_yscale("log")
-        # Headroom above the "1.5x" annotations (which sit at max*3) so the
-        # legend at the figure top has room to breathe.
+        # Leave headroom above the comparison annotations and shared legend.
         axis.set_ylim(top=max(all_values) * 20.0)
         axis.set_title(title)
         axis.set_xticks(x, cases, rotation=18, ha="right")
@@ -107,7 +116,7 @@ def write_comparison_plot(rows: list[dict], path: Path) -> None:
         axis.grid(axis="y", which="both", linestyle=":", alpha=0.5)
 
     figure.suptitle(
-        "MFEM GPU Showcase (labels show CPU / GPU speedup)", fontsize=15, y=0.995,
+        "MFEM GPU Showcase (annotations compare GPU with CPU)", fontsize=15, y=0.995,
     )
     # One shared legend, above the axes and below the suptitle, so it never
     # overlaps the tallest CPU bars in either subplot.
@@ -145,7 +154,7 @@ def write_phase_plot(rows: list[dict], path: Path) -> None:
     axis.set_ylim(top=totals.max() * 1.15)
     axis.set_xticks(x, labels, rotation=25, ha="right")
     axis.set_ylabel("Time (seconds)")
-    axis.set_title("Independent Profiling Phases")
+    axis.set_title("Profiled Setup + Initial Solve Breakdown")
     axis.grid(axis="y", linestyle=":", alpha=0.5)
     # Legend below the plot so it can never occlude the tallest stack
     # (p1 PA Jacobi CPU is ~100s tall on this axis).

@@ -443,37 +443,40 @@ def main() -> None:
     summary_path = args.output / "profiling_summary.csv"
     raw_path = args.output / "profiling_samples.csv"
     solve_plot_path = args.output / "solve_time_vs_error.png"
-    full_plot_path = args.output / "assembly_setup_solve_time_vs_error.png"
+    profiled_setup_plot_path = (
+        args.output / "profiled_setup_initial_solve_time_vs_error.png"
+    )
     write_csv(results, summary_path)
     write_csv(raw_rows, raw_path)
     write_plot(
         results,
         solve_plot_path,
-        "solve_total_seconds",
-        r"$\mathrm{Warm\!-\!up\ solve + steady\!-\!state\ solve\ time\ (s)}$",
+        "steady_solve_seconds",
+        r"$\mathrm{Median\ repeated\ solve\ (all\ CG\ iterations)\ (s)}$",
     )
     write_plot(
         results,
-        full_plot_path,
+        profiled_setup_plot_path,
         "assembly_setup_solve_total_seconds",
-        r"$\mathrm{Cold\ start + assembly + setup + first\ solve\ (s)}$",
+        r"$\mathrm{Profiled\ setup + initial\ solve\ (all\ CG\ iterations)\ (s)}$",
     )
 
-    print("\nIndependent phase and aggregate times (seconds):")
+    print("\nProfiled phase and aggregate times (seconds):")
     for result in results:
         print(
             f"{DEVICES[result.device]['label']:11s} {result.solver:11s} "
             f"p={result.order} n={result.n:3d} "
-            f"cold={result.cold_start_seconds:.3e} "
-            f"assembly={result.assembly_seconds:.3e} setup={result.setup_seconds:.3e} "
-            f"warmup={result.warmup_solve_seconds:.3e} "
-            f"steady={result.steady_solve_seconds:.3e} "
+            f"early-init={result.cold_start_seconds:.3e} "
+            f"operator-construction={result.assembly_seconds:.3e} "
+            f"preconditioner-setup={result.setup_seconds:.3e} "
+            f"initial-solve={result.warmup_solve_seconds:.3e} "
+            f"median-repeated-solve={result.steady_solve_seconds:.3e} "
             f"error={result.l2_error:.6e}"
         )
     print(f"Summary:    {summary_path}")
     print(f"Samples:    {raw_path}")
     print(f"Solve plot: {solve_plot_path}")
-    print(f"Full plot:  {full_plot_path}")
+    print(f"Profiled setup plot: {profiled_setup_plot_path}")
     if skipped:
         print(f"\nSkipped {len(skipped)} configuration(s):")
         for device, solver, order, size, reason in skipped:

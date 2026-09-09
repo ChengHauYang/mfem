@@ -116,8 +116,11 @@ def write_csv(results: list[ShowcaseResult], path: Path) -> None:
 def write_comparison_plot(results: list[ShowcaseResult], path: Path) -> None:
     cases = list(dict.fromkeys(result.case for result in results))
     metrics = (
-        ("steady_solve_seconds", "Steady-state solve"),
-        ("assembly_setup_solve_total_seconds", "Cold + assembly + setup + first solve"),
+        ("steady_solve_seconds", "Median repeated solve (all CG iterations)"),
+        (
+            "assembly_setup_solve_total_seconds",
+            "Profiled setup + initial solve (all CG iterations)",
+        ),
     )
     colors = {"cpu": "#315b7d", "cuda": "#e36b3d"}
     figure, axes = plt.subplots(1, 2, figsize=(14, 5.5), dpi=100)
@@ -153,7 +156,11 @@ def write_comparison_plot(results: list[ShowcaseResult], path: Path) -> None:
             axis.text(
                 case_index,
                 max(cpu, cuda) * 1.8,
-                f"{cpu / cuda:.1f}x",
+                (
+                    f"{cpu / cuda:.1f}x faster"
+                    if cpu >= cuda
+                    else f"{cuda / cpu:.1f}x slower"
+                ),
                 ha="center",
                 va="bottom",
                 fontweight="bold",
@@ -166,7 +173,9 @@ def write_comparison_plot(results: list[ShowcaseResult], path: Path) -> None:
         axis.grid(axis="y", which="both", linestyle=":", alpha=0.5)
 
     axes[0].legend(loc="upper left")
-    figure.suptitle("MFEM GPU Showcase (labels show CPU / GPU speedup)", fontsize=15)
+    figure.suptitle(
+        "MFEM GPU Showcase (annotations compare GPU with CPU)", fontsize=15
+    )
     figure.tight_layout()
     figure.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(figure)
@@ -175,10 +184,18 @@ def write_comparison_plot(results: list[ShowcaseResult], path: Path) -> None:
 def write_phase_plot(results: list[ShowcaseResult], path: Path) -> None:
     labels = [f"{result.case}\n{DEVICES[result.device]['label']}" for result in results]
     phases = (
-        ("cold_start_seconds", "Cold start", "#61788a"),
-        ("assembly_seconds", "Assembly", "#94a89a"),
-        ("setup_seconds", "Setup", "#d6a84b"),
-        ("warmup_solve_seconds", "First solve", "#dc7653"),
+        ("cold_start_seconds", "Early initialization", "#61788a"),
+        (
+            "assembly_seconds",
+            "Operator construction (incl. GPU first use)",
+            "#94a89a",
+        ),
+        ("setup_seconds", "Preconditioner setup", "#d6a84b"),
+        (
+            "warmup_solve_seconds",
+            "Initial solve (all CG iterations)",
+            "#dc7653",
+        ),
     )
     figure, axis = plt.subplots(figsize=(14, 6), dpi=100)
     x = np.arange(len(results))
@@ -189,7 +206,7 @@ def write_phase_plot(results: list[ShowcaseResult], path: Path) -> None:
         bottom += values
     axis.set_xticks(x, labels, rotation=25, ha="right")
     axis.set_ylabel("Time (seconds)")
-    axis.set_title("Independent Profiling Phases")
+    axis.set_title("Profiled Setup + Initial Solve Breakdown")
     axis.grid(axis="y", linestyle=":", alpha=0.5)
     axis.legend(ncols=3, loc="upper left")
     figure.tight_layout()
@@ -239,10 +256,11 @@ def main() -> None:
         hierarchy = f", hierarchy={cuda.hierarchy}" if cuda.hierarchy != "n/a" else ""
         print(
             f"{case:20s} DOFs={cuda.dofs:9d}{hierarchy}\n"
-            f"  steady: CPU={cpu.steady_solve_seconds:.6g}s "
+            f"  median repeated solve: CPU={cpu.steady_solve_seconds:.6g}s "
             f"GPU={cuda.steady_solve_seconds:.6g}s "
             f"speedup={cpu.steady_solve_seconds / cuda.steady_solve_seconds:.2f}x\n"
-            f"  full:   CPU={cpu.assembly_setup_solve_total_seconds:.6g}s "
+            f"  profiled setup + initial solve: "
+            f"CPU={cpu.assembly_setup_solve_total_seconds:.6g}s "
             f"GPU={cuda.assembly_setup_solve_total_seconds:.6g}s "
             f"speedup={cpu.assembly_setup_solve_total_seconds / cuda.assembly_setup_solve_total_seconds:.2f}x"
         )

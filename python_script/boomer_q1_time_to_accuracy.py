@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare time to MMS accuracy for P6 CEED/Q1 AMG and P1 BoomerAMG."""
+"""Compare profiled setup-and-solve time to MMS accuracy."""
 
 import argparse
 import csv
@@ -29,10 +29,10 @@ class TimeToAccuracyResult:
     cold_start_seconds: float
     assembly_seconds: float
     setup_seconds: float
-    first_solve_seconds: float
-    median_steady_solve_seconds: float
-    warmup_overhead_seconds: float
-    time_to_accuracy_seconds: float
+    initial_solve_seconds: float
+    median_repeated_solve_seconds: float
+    initial_minus_median_repeated_seconds: float
+    profiled_setup_initial_solve_seconds: float
 
 
 def convert_result(result: ProfileResult) -> TimeToAccuracyResult:
@@ -55,12 +55,12 @@ def convert_result(result: ProfileResult) -> TimeToAccuracyResult:
         cold_start_seconds=result.cold_start_seconds,
         assembly_seconds=result.assembly_seconds,
         setup_seconds=result.setup_seconds,
-        first_solve_seconds=result.warmup_solve_seconds,
-        median_steady_solve_seconds=result.steady_solve_seconds,
-        warmup_overhead_seconds=(
+        initial_solve_seconds=result.warmup_solve_seconds,
+        median_repeated_solve_seconds=result.steady_solve_seconds,
+        initial_minus_median_repeated_seconds=(
             result.warmup_solve_seconds - result.steady_solve_seconds
         ),
-        time_to_accuracy_seconds=(
+        profiled_setup_initial_solve_seconds=(
             result.cold_start_seconds
             + result.assembly_seconds
             + result.setup_seconds
@@ -133,7 +133,7 @@ def write_plot(
             ),
             key=lambda result: result.n,
         )
-        x_values = [result.time_to_accuracy_seconds for result in series]
+        x_values = [result.profiled_setup_initial_solve_seconds for result in series]
         y_values = [result.l2_error for result in series]
         axis.loglog(
             x_values,
@@ -156,9 +156,12 @@ def write_plot(
                 color=color,
             )
 
-    axis.set_xlabel("Cold + assembly + setup + first solve (s)")
+    axis.set_xlabel("Profiled setup + initial solve (all CG iterations) (s)")
     axis.set_ylabel(r"$L^2$ error with respect to MMS")
-    axis.set_title(f"Time to Accuracy ({DEVICES[device]['label']}, MMS: {mms})")
+    axis.set_title(
+        f"Profiled Setup-and-Solve Time to Accuracy "
+        f"({DEVICES[device]['label']}, MMS: {mms})"
+    )
     axis.grid(which="major", color="0.75", linewidth=0.8)
     axis.grid(which="minor", color="0.88", linewidth=0.5, linestyle=":")
     axis.legend()
@@ -198,12 +201,13 @@ def main() -> None:
     write_csv(results, csv_path)
     write_plot(results, plot_path, args.mms, args.device)
 
-    print("\nTime-to-accuracy results:")
+    print("\nProfiled setup-and-solve time-to-accuracy results:")
     for result in results:
         print(
             f"{result.configuration:30s} n={result.n:3d} "
             f"DOFs={result.dofs:9d} iterations={result.steady_iterations:4d} "
-            f"time-to-accuracy={result.time_to_accuracy_seconds:.6g}s "
+            f"profiled-setup+initial-solve="
+            f"{result.profiled_setup_initial_solve_seconds:.6g}s "
             f"L2={result.l2_error:.6e}"
         )
     print(f"\nCSV:       {csv_path}")

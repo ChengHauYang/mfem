@@ -28,7 +28,7 @@ class ComparisonResult:
     setup_seconds: float
     warmup_solve_seconds: float
     steady_solve_seconds: float
-    full_pipeline_seconds: float
+    profiled_setup_initial_solve_seconds: float
 
 
 def parse_args() -> argparse.Namespace:
@@ -70,7 +70,9 @@ def convert(result: ProfileResult, coarse_solver: str) -> ComparisonResult:
         setup_seconds=result.setup_seconds,
         warmup_solve_seconds=result.warmup_solve_seconds,
         steady_solve_seconds=result.steady_solve_seconds,
-        full_pipeline_seconds=result.assembly_setup_solve_total_seconds,
+        profiled_setup_initial_solve_seconds=(
+            result.assembly_setup_solve_total_seconds
+        ),
     )
 
 
@@ -84,9 +86,15 @@ def write_csv(results: list[ComparisonResult], path: Path) -> None:
 def write_plot(results: list[ComparisonResult], path: Path) -> None:
     labels = [result.coarse_solver for result in results]
     metrics = (
-        ("setup_seconds", "Setup"),
-        ("steady_solve_seconds", "Steady solve"),
-        ("full_pipeline_seconds", "Full pipeline"),
+        ("setup_seconds", "Preconditioner setup"),
+        (
+            "steady_solve_seconds",
+            "Median repeated solve (all CG iterations)",
+        ),
+        (
+            "profiled_setup_initial_solve_seconds",
+            "Profiled setup + initial solve (all CG iterations)",
+        ),
     )
     x = np.arange(len(labels))
     width = 0.24
@@ -150,15 +158,16 @@ def main() -> None:
         print(
             f"{result.coarse_solver:20s} DOFs={result.dofs:,} "
             f"iterations={result.steady_iterations} "
-            f"setup={result.setup_seconds:.6g}s "
-            f"steady={result.steady_solve_seconds:.6g}s "
-            f"full={result.full_pipeline_seconds:.6g}s"
+            f"preconditioner-setup={result.setup_seconds:.6g}s "
+            f"median-repeated-solve={result.steady_solve_seconds:.6g}s "
+            f"profiled-setup+initial-solve="
+            f"{result.profiled_setup_initial_solve_seconds:.6g}s"
         )
     original, hybrid = results
     print(
         f"\nHybrid/original iteration ratio: "
         f"{hybrid.steady_iterations / original.steady_iterations:.3f}\n"
-        f"Original/hybrid steady speedup: "
+        f"Original/hybrid median repeated-solve speedup: "
         f"{original.steady_solve_seconds / hybrid.steady_solve_seconds:.3f}x"
     )
     print(f"CSV:  {csv_path}")

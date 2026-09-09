@@ -103,15 +103,18 @@ def main() -> None:
         cuda = by_key[(label, "cuda")]
         print(
             f"{label.replace(chr(10), ' '):32s} DOFs={cuda.dofs:9d}\n"
-            f"  CPU:  iterations={cpu.steady_iterations:4d} "
-            f"steady={cpu.steady_solve_seconds:.6g}s "
-            f"full={cpu.assembly_setup_solve_total_seconds:.6g}s\n"
-            f"  CUDA: iterations={cuda.steady_iterations:4d} "
-            f"steady={cuda.steady_solve_seconds:.6g}s "
-            f"full={cuda.assembly_setup_solve_total_seconds:.6g}s\n"
-            f"  speedup: steady="
+            f"  CPU:  repeated iterations={cpu.steady_iterations:4d} "
+            f"median repeated solve={cpu.steady_solve_seconds:.6g}s "
+            f"profiled setup + initial solve="
+            f"{cpu.assembly_setup_solve_total_seconds:.6g}s\n"
+            f"  CUDA: repeated iterations={cuda.steady_iterations:4d} "
+            f"median repeated solve={cuda.steady_solve_seconds:.6g}s "
+            f"profiled setup + initial solve="
+            f"{cuda.assembly_setup_solve_total_seconds:.6g}s\n"
+            f"  speedup: median repeated solve="
             f"{cpu.steady_solve_seconds / cuda.steady_solve_seconds:.2f}x "
-            f"full={cpu.assembly_setup_solve_total_seconds / cuda.assembly_setup_solve_total_seconds:.2f}x"
+            f"profiled setup + initial solve="
+            f"{cpu.assembly_setup_solve_total_seconds / cuda.assembly_setup_solve_total_seconds:.2f}x"
         )
 
     print(f"\nCSV:        {csv_path}")
