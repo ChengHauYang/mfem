@@ -504,3 +504,4 @@ TAGS
 
 # vs code
 .vscode
+/python_script/*_results/solutions/
