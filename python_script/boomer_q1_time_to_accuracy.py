@@ -10,8 +10,8 @@ import matplotlib.pyplot as plt
 
 from profiling_and_error import DEVICES, MMS_CHOICES, ProfileResult, profile_case
 
-P6_SIZES = (4, 8, 16, 32, 64)
-P1_SIZES = (32, 64, 128, 256, 512)
+P6_SIZES = (8, 16, 32, 64)
+P1_SIZES = (64, 128, 256, 512)
 
 
 @dataclass(frozen=True)
