@@ -7,6 +7,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 from gpu_showcase_replot import load_rows, write_comparison_plot, write_phase_plot
+from profiling_and_error import default_tagged_input, split_platform_tag
 
 
 plt.rcParams.update(
@@ -27,33 +28,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--input",
         type=Path,
-        default=default_dir / "gpu_showcase_with_boomer_on_Q1.csv",
+        default=default_tagged_input(
+            default_dir, "gpu_showcase_with_boomer_on_Q1"
+        ),
         help="input CSV (default: %(default)s)",
     )
     parser.add_argument(
         "--comparison-out",
         type=Path,
         default=None,
-        help="comparison PNG (default: <input dir>/gpu_showcase_with_boomer_on_Q1.png)",
+        help="comparison PNG "
+             "(default: <input dir>/gpu_showcase_with_boomer_on_Q1_<platform>.png)",
     )
     parser.add_argument(
         "--phases-out",
         type=Path,
         default=None,
-        help="phase PNG (default: <input dir>/gpu_showcase_with_boomer_on_Q1_phases.png)",
+        help="phase PNG (default: <input dir>/"
+             "gpu_showcase_with_boomer_on_Q1_phases_<platform>.png)",
     )
     args = parser.parse_args()
     args.input = args.input.resolve()
     if not args.input.is_file():
         parser.error(f"input CSV not found: {args.input}")
     parent = args.input.parent
+    # Follow the tag the CSV already carries, so replotting a Linux run on a Mac
+    # does not relabel its PNGs.
+    base, tag = split_platform_tag(args.input.stem)
     args.comparison_out = (
-        args.comparison_out
-        or parent / "gpu_showcase_with_boomer_on_Q1.png"
+        args.comparison_out or parent / f"{base}{tag}.png"
     ).resolve()
     args.phases_out = (
-        args.phases_out
-        or parent / "gpu_showcase_with_boomer_on_Q1_phases.png"
+        args.phases_out or parent / f"{base}_phases{tag}.png"
     ).resolve()
     return args
 

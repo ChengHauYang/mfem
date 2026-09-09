@@ -10,7 +10,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from profiling_and_error import ProfileResult, profile_case
+from profiling_and_error import ProfileResult, profile_case, tagged
 
 
 @dataclass(frozen=True)
@@ -148,8 +148,8 @@ def main() -> None:
             )
             results.append(convert(result, name))
 
-    csv_path = args.output / "ceed_coarse_solver_comparison.csv"
-    plot_path = args.output / "ceed_coarse_solver_comparison.png"
+    csv_path = args.output / tagged("ceed_coarse_solver_comparison", ".csv")
+    plot_path = args.output / tagged("ceed_coarse_solver_comparison", ".png")
     write_csv(results, csv_path)
     write_plot(results, plot_path)
 

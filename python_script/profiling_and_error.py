@@ -3,6 +3,7 @@
 
 import argparse
 import csv
+import platform
 import re
 import shutil
 import statistics
@@ -26,6 +27,37 @@ DEFAULT_SIZES_BY_ORDER = {
     7: (1, 2, 4, 8),
 }
 MMS_CHOICES = ("sine", "multimode", "bubble-exp")
+PLATFORM_TAGS = {"Linux": "linux", "Darwin": "mac"}
+
+
+def platform_suffix() -> str:
+    """Tag for output files, so Linux and macOS runs do not overwrite each other."""
+    system = platform.system()
+    return PLATFORM_TAGS.get(system, system.lower())
+
+
+def tagged(base: str, extension: str) -> str:
+    """"gpu_showcase", ".csv" -> "gpu_showcase_mac.csv" on this platform."""
+    return f"{base}_{platform_suffix()}{extension}"
+
+
+def split_platform_tag(stem: str) -> tuple[str, str]:
+    """"gpu_showcase_mac" -> ("gpu_showcase", "_mac"); untagged stems keep ""."""
+    for tag in PLATFORM_TAGS.values():
+        if stem.endswith(f"_{tag}"):
+            return stem[: -len(tag) - 1], f"_{tag}"
+    return stem, ""
+
+
+def default_tagged_input(directory: Path, base: str) -> Path:
+    """This platform's CSV if it exists, else the only tagged one in `directory`."""
+    preferred = directory / tagged(base, ".csv")
+    if preferred.is_file():
+        return preferred
+    candidates = sorted(directory.glob(f"{base}_*.csv"))
+    return candidates[0] if len(candidates) == 1 else preferred
+
+
 DEVICES = {
     "cpu": {"label": "CPU", "ceed": "ceed-cpu", "hypre": "cpu"},
     "cuda": {"label": "GPU (CUDA)", "ceed": "ceed-cuda", "hypre": "cuda"},
@@ -68,6 +100,7 @@ class ProfileResult:
     steady_solve_seconds: float
     solve_total_seconds: float
     assembly_setup_solve_total_seconds: float
+    dim: int = 2
 
 
 def write_inline_quad(path: Path, size: int) -> None:
@@ -89,17 +122,23 @@ def run_once(
     repeats: int,
     extra_flags: tuple[str, ...] = (),
     save_solution: bool = False,
+    dim: int = 2,
 ) -> tuple[int, float, int, list[int], dict[str, float], list[float]]:
-    mesh_path = case_dir / "inline-quad.mesh"
-    write_inline_quad(mesh_path, size)
+    if dim == 3:
+        # ex1p generates the unit cube itself, so there is no serial mesh file
+        # to write out and read back on every rank.
+        mesh_flags = ["-dim", "3", "-n", str(size)]
+    else:
+        mesh_path = case_dir / "inline-quad.mesh"
+        write_inline_quad(mesh_path, size)
+        mesh_flags = ["-m", str(mesh_path)]
     device_backend = DEVICES[device][SOLVERS[solver]["family"]]
     command = [
         "mpirun",
         "-np",
         str(mpi_ranks),
         str(executable),
-        "-m",
-        str(mesh_path),
+        *mesh_flags,
         "-o",
         str(order),
         "-rs",
@@ -121,7 +160,7 @@ def run_once(
     output = process.stdout + process.stderr
     if process.returncode:
         raise RuntimeError(
-            f"{device}/{solver}, order={order}, n={size} failed:\n{output}"
+            f"{dim}D {device}/{solver}, order={order}, n={size} failed:\n{output}"
         )
 
     dofs = re.search(r"Number of finite element unknowns: (\d+)", process.stdout)
@@ -155,7 +194,8 @@ def run_once(
         or len(steady_iterations) != repeats
     ):
         raise RuntimeError(
-            f"could not parse {device}/{solver}, order={order}, n={size}:\n{output}"
+            f"could not parse {dim}D {device}/{solver}, order={order}, "
+            f"n={size}:\n{output}"
         )
     return (
         int(dofs.group(1)),
@@ -179,18 +219,23 @@ def profile_case(
     repeats: int,
     extra_flags: tuple[str, ...] = (),
     save_solution: bool = False,
+    dim: int = 2,
 ) -> tuple[ProfileResult, list[tuple[int, float]]]:
-    case_dir = work_dir / device / solver / f"order{order}" / f"n{size:04d}"
+    if dim not in (2, 3):
+        raise ValueError(f"dim must be 2 or 3, got {dim}")
+    case_dir = (
+        work_dir / f"{dim}d" / device / solver / f"order{order}" / f"n{size:04d}"
+    )
     case_dir.mkdir(parents=True, exist_ok=True)
     print(
-        f"Profiling {DEVICES[device]['label']} / {SOLVERS[solver]['label']}, "
-        f"p={order}, n={size} ...",
+        f"Profiling {dim}D {DEVICES[device]['label']} / "
+        f"{SOLVERS[solver]['label']}, p={order}, n={size} ...",
         flush=True,
     )
 
     dofs, l2_error, warmup_iterations, steady_iterations, timings, steady_times = run_once(
         executable, case_dir, mpi_ranks, device, solver, mms, order, size, repeats,
-        extra_flags, save_solution,
+        extra_flags, save_solution, dim,
     )
     steady_solve = statistics.median(steady_times)
     solve_total = timings["warmup"] + steady_solve
@@ -220,6 +265,7 @@ def profile_case(
             steady_solve_seconds=steady_solve,
             solve_total_seconds=solve_total,
             assembly_setup_solve_total_seconds=full_total,
+            dim=dim,
         ),
         list(zip(steady_iterations, steady_times)),
     )
@@ -352,6 +398,27 @@ def detect_cuda() -> bool:
     return probe.returncode == 0 and bool(probe.stdout.strip())
 
 
+def build_has_cuda(repo: Path) -> bool | None:
+    """MFEM_USE_CUDA from config/config.mk; None when the file is unreadable."""
+    try:
+        text = (repo / "config" / "config.mk").read_text()
+    except OSError:
+        return None
+    match = re.search(r"^MFEM_USE_CUDA\s*=\s*(\S+)", text, re.MULTILINE)
+    return match.group(1).upper() == "YES" if match else None
+
+
+def default_device(repo: Path) -> str:
+    """"cuda" only when MFEM was built with CUDA *and* a GPU is visible.
+
+    A CUDA-less build aborts in Device::Setup long before the solver runs, so
+    there is no point defaulting to a device this binary cannot reach.
+    """
+    if build_has_cuda(repo) is False:
+        return "cpu"
+    return "cuda" if detect_cuda() else "cpu"
+
+
 def parse_args() -> argparse.Namespace:
     repo = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -440,11 +507,11 @@ def main() -> None:
                             for run, (iterations, elapsed) in enumerate(samples, 1)
                         )
 
-    summary_path = args.output / "profiling_summary.csv"
-    raw_path = args.output / "profiling_samples.csv"
-    solve_plot_path = args.output / "solve_time_vs_error.png"
-    profiled_setup_plot_path = (
-        args.output / "profiled_setup_initial_solve_time_vs_error.png"
+    summary_path = args.output / tagged("profiling_summary", ".csv")
+    raw_path = args.output / tagged("profiling_samples", ".csv")
+    solve_plot_path = args.output / tagged("solve_time_vs_error", ".png")
+    profiled_setup_plot_path = args.output / tagged(
+        "profiled_setup_initial_solve_time_vs_error", ".png"
     )
     write_csv(results, summary_path)
     write_csv(raw_rows, raw_path)

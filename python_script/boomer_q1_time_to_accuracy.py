@@ -8,7 +8,15 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-from profiling_and_error import DEVICES, MMS_CHOICES, ProfileResult, profile_case
+from profiling_and_error import (
+    DEVICES,
+    MMS_CHOICES,
+    ProfileResult,
+    build_has_cuda,
+    default_device,
+    profile_case,
+    tagged,
+)
 
 P6_SIZES = (8, 16, 32, 64)
 P1_SIZES = (64, 128, 256, 512)
@@ -79,7 +87,13 @@ def write_csv(results: list[TimeToAccuracyResult], path: Path) -> None:
 def parse_args() -> argparse.Namespace:
     repo = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--device", choices=DEVICES, default="cuda")
+    parser.add_argument(
+        "--device",
+        choices=DEVICES,
+        default=default_device(repo),
+        help="default: %(default)s (cuda only when this MFEM build has "
+             "MFEM_USE_CUDA=YES and a GPU is visible)",
+    )
     parser.add_argument("--mms", choices=MMS_CHOICES, default="bubble-exp")
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--np", dest="mpi_ranks", type=int, default=1)
@@ -97,6 +111,11 @@ def parse_args() -> argparse.Namespace:
         parser.error("--repeats must be between 3 and 5")
     if args.mpi_ranks <= 0:
         parser.error("--np must be positive")
+    if args.device == "cuda" and build_has_cuda(repo) is False:
+        parser.error(
+            "this MFEM build has MFEM_USE_CUDA=NO, so --device cuda aborts in "
+            "Device::Setup; rebuild with CUDA or use --device cpu"
+        )
     args.executable = args.executable.resolve()
     args.output = args.output.resolve()
     if not args.executable.is_file():
@@ -196,8 +215,8 @@ def main() -> None:
             )
             results.append(convert_result(result))
 
-    csv_path = args.output / "boomer_q1_time_to_accuracy.csv"
-    plot_path = args.output / "boomer_q1_time_to_accuracy.png"
+    csv_path = args.output / tagged("boomer_q1_time_to_accuracy", ".csv")
+    plot_path = args.output / tagged("boomer_q1_time_to_accuracy", ".png")
     write_csv(results, csv_path)
     write_plot(results, plot_path, args.mms, args.device)
 

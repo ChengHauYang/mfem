@@ -10,7 +10,13 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from profiling_and_error import DEVICES, SOLVERS, ProfileResult, profile_case
+from profiling_and_error import (
+    DEVICES,
+    SOLVERS,
+    ProfileResult,
+    profile_case,
+    tagged,
+)
 
 
 @dataclass(frozen=True)
@@ -241,9 +247,9 @@ def main() -> None:
                 )
                 results.append(convert_result(result))
 
-    csv_path = args.output / "gpu_showcase.csv"
-    comparison_path = args.output / "gpu_showcase.png"
-    phase_path = args.output / "gpu_showcase_phases.png"
+    csv_path = args.output / tagged("gpu_showcase", ".csv")
+    comparison_path = args.output / tagged("gpu_showcase", ".png")
+    phase_path = args.output / tagged("gpu_showcase_phases", ".png")
     write_csv(results, csv_path)
     write_comparison_plot(results, comparison_path)
     write_phase_plot(results, phase_path)

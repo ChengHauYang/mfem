@@ -1,7 +1,7 @@
 # GPU showcase — interpretation
 
 Four cases, CPU vs CUDA on `mom-01` (2× RTX A5000, `sm_86`, one rank). Data
-in `gpu_showcase.csv`; see `python_script/gpu_showcase.py` for the runner
+in `gpu_showcase_linux.csv`; see `python_script/gpu_showcase.py` for the runner
 and the phased profiler it wraps. Times are seconds; "speedup" is CPU / CUDA.
 
 ## Cases at a glance

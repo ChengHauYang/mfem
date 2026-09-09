@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Re-render the GPU showcase PNGs from an existing gpu_showcase.csv.
+"""Re-render the GPU showcase PNGs from an existing gpu_showcase_<platform>.csv.
 
-Reads the CSV produced by gpu_showcase.py and overwrites
-gpu_showcase.png and gpu_showcase_phases.png in the same directory
-with a layout that does not overlap the tallest bars with the legend
-or the per-bar value labels. Does not re-run any simulation.
+Reads the CSV produced by gpu_showcase.py and overwrites the comparison and
+phases PNGs carrying the same platform tag in the same directory, with a layout
+that does not overlap the tallest bars with the legend or the per-bar value
+labels. Does not re-run any simulation.
 """
 
 import argparse
@@ -13,6 +13,8 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+from profiling_and_error import default_tagged_input, split_platform_tag
 
 DEVICE_LABEL = {"cpu": "CPU", "cuda": "GPU (CUDA)"}
 DEVICE_COLOR = {"cpu": "#315b7d", "cuda": "#e36b3d"}
@@ -171,26 +173,34 @@ def parse_args() -> argparse.Namespace:
     default_dir = Path(__file__).resolve().parent / "gpu_showcase_results"
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--input", type=Path, default=default_dir / "gpu_showcase.csv",
-        help="path to gpu_showcase.csv (default: %(default)s)",
+        "--input", type=Path,
+        default=default_tagged_input(default_dir, "gpu_showcase"),
+        help="path to gpu_showcase_<platform>.csv (default: %(default)s)",
     )
     parser.add_argument(
         "--comparison-out", type=Path, default=None,
         help="output PNG for the comparison plot "
-             "(default: <input dir>/gpu_showcase.png)",
+             "(default: <input dir>/gpu_showcase_<platform>.png)",
     )
     parser.add_argument(
         "--phases-out", type=Path, default=None,
         help="output PNG for the phases plot "
-             "(default: <input dir>/gpu_showcase_phases.png)",
+             "(default: <input dir>/gpu_showcase_phases_<platform>.png)",
     )
     args = parser.parse_args()
     args.input = args.input.resolve()
     if not args.input.is_file():
         parser.error(f"input CSV not found: {args.input}")
     parent = args.input.parent
-    args.comparison_out = (args.comparison_out or parent / "gpu_showcase.png").resolve()
-    args.phases_out = (args.phases_out or parent / "gpu_showcase_phases.png").resolve()
+    # Follow the tag the CSV already carries, so replotting a Linux run on a Mac
+    # does not relabel its PNGs.
+    base, tag = split_platform_tag(args.input.stem)
+    args.comparison_out = (
+        args.comparison_out or parent / f"{base}{tag}.png"
+    ).resolve()
+    args.phases_out = (
+        args.phases_out or parent / f"{base}_phases{tag}.png"
+    ).resolve()
     return args
 
 

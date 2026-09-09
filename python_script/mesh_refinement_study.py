@@ -13,6 +13,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from profiling_and_error import tagged
+
 DEFAULT_ORDERS = tuple(range(1, 8))
 MMS_CHOICES = ("sine", "multimode", "bubble-exp")
 DEFAULT_SIZES_BY_ORDER = {
@@ -277,8 +279,8 @@ def main() -> None:
         for order in config.orders
     }
 
-    csv_path = config.output_dir / "convergence.csv"
-    plot_path = config.output_dir / "mesh_convergence.png"
+    csv_path = config.output_dir / tagged("convergence", ".csv")
+    plot_path = config.output_dir / tagged("mesh_convergence", ".png")
     write_csv(results, csv_path)
     write_png(results, rates, config.mms, plot_path)
 

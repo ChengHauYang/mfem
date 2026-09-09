@@ -64,10 +64,10 @@ values, so the components can be inspected without inferring them from a plot.
 
 Output tree under `python_script/profiling_and_error_results/` (gitignored):
 
-    profiling_summary.csv                 independent phases and aggregate times
-    profiling_samples.csv                 same-process steady-solve samples
-    solve_time_vs_error.png               first + median repeated solve
-    assembly_setup_solve_time_vs_error.png all profiled phases added together
+    profiling_summary_linux.csv           independent phases and aggregate times
+    profiling_samples_linux.csv           same-process steady-solve samples
+    solve_time_vs_error_linux.png         first + median repeated solve
+    assembly_setup_solve_time_vs_error_linux.png all profiled phases added together
 
 Coverage:
 
@@ -93,7 +93,7 @@ Read across the row for a size to compare preconditioners; read down a
 column for weak/strong scaling on that (solver, device) pair.
 
 Rules of thumb visible in the numbers below (solve only; assembly and setup
-are separate columns in `profiling_summary.csv`):
+are separate columns in `profiling_summary_<platform>.csv`):
 - CUDA carries a per-case overhead of ~0.03-0.1s from context init and
   kernel launch, so CPU still wins the smallest cases outright.
 - `pa-jacobi cuda` is the decisive crossover once DOFs are moderate:

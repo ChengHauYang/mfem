@@ -88,11 +88,15 @@ steady
 It also creates:
 
 ```text
-python_script/profiling_gpu_smoke/profiling_summary.csv
-python_script/profiling_gpu_smoke/profiling_samples.csv
-python_script/profiling_gpu_smoke/solve_time_vs_error.png
-python_script/profiling_gpu_smoke/assembly_setup_solve_time_vs_error.png
+python_script/profiling_gpu_smoke/profiling_summary_linux.csv
+python_script/profiling_gpu_smoke/profiling_samples_linux.csv
+python_script/profiling_gpu_smoke/solve_time_vs_error_linux.png
+python_script/profiling_gpu_smoke/assembly_setup_solve_time_vs_error_linux.png
 ```
+
+Every CSV and PNG the python drivers write carries a `_linux` / `_mac` tag just
+before the extension, so results from the cluster and from a laptop can sit in
+the same directory without overwriting each other.
 
 The first solve and all steady-state repeats execute in the same `ex1p`
 process. They reuse the same operator and preconditioner. This is required for
@@ -168,12 +172,12 @@ assembly_setup_solve_total_seconds
 Therefore, `solve_time_vs_error.png` represents one first solve plus one
 representative repeated solve. `assembly_setup_solve_time_vs_error.png` adds the
 cold-start, assembly, and setup phases to that value. The individual columns
-remain available in `profiling_summary.csv` so their costs can be compared
+remain available in `profiling_summary_<platform>.csv` so their costs can be compared
 without relying only on the aggregate plots.
 
 `profiling_samples.csv` contains every steady-state repeat and its CG iteration
 count. The warm-up and steady-state iteration counts are also summarized in
-`profiling_summary.csv`.
+`profiling_summary_<platform>.csv`.
 
 ## Multi-GPU runs
 

@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from gpu_showcase import convert_result, write_comparison_plot, write_csv, write_phase_plot
-from profiling_and_error import profile_case
+from profiling_and_error import profile_case, tagged
 
 
 def parse_args() -> argparse.Namespace:
@@ -89,9 +89,11 @@ def main() -> None:
                 )
                 results.append(replace(converted, case=label, hierarchy=hierarchy))
 
-    csv_path = args.output / "gpu_showcase_with_boomer_on_Q1.csv"
-    comparison_path = args.output / "gpu_showcase_with_boomer_on_Q1.png"
-    phase_path = args.output / "gpu_showcase_with_boomer_on_Q1_phases.png"
+    csv_path = args.output / tagged("gpu_showcase_with_boomer_on_Q1", ".csv")
+    comparison_path = args.output / tagged("gpu_showcase_with_boomer_on_Q1", ".png")
+    phase_path = args.output / tagged(
+        "gpu_showcase_with_boomer_on_Q1_phases", ".png"
+    )
     write_csv(results, csv_path)
     write_comparison_plot(results, comparison_path)
     write_phase_plot(results, phase_path)
