@@ -31,6 +31,13 @@ class ShowcaseResult:
     l2_error: float
     warmup_iterations: int
     steady_iterations: int
+    warmup_converged: bool
+    steady_converged: bool
+    warmup_final_residual_norm: float
+    steady_final_residual_norm: float
+    gpu_memory_baseline_mib: float
+    gpu_memory_peak_mib: float
+    gpu_memory_peak_delta_mib: float
     cold_start_seconds: float
     assembly_seconds: float
     setup_seconds: float
@@ -102,6 +109,13 @@ def convert_result(result: ProfileResult) -> ShowcaseResult:
         l2_error=result.l2_error,
         warmup_iterations=result.warmup_iterations,
         steady_iterations=result.steady_iterations,
+        warmup_converged=result.warmup_converged,
+        steady_converged=result.steady_converged,
+        warmup_final_residual_norm=result.warmup_final_residual_norm,
+        steady_final_residual_norm=result.steady_final_residual_norm,
+        gpu_memory_baseline_mib=result.gpu_memory_baseline_mib,
+        gpu_memory_peak_mib=result.gpu_memory_peak_mib,
+        gpu_memory_peak_delta_mib=result.gpu_memory_peak_delta_mib,
         cold_start_seconds=result.cold_start_seconds,
         assembly_seconds=result.assembly_seconds,
         setup_seconds=result.setup_seconds,

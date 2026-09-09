@@ -9,6 +9,7 @@ import shutil
 import statistics
 import subprocess
 import tempfile
+import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -93,6 +94,13 @@ class ProfileResult:
     l2_error: float
     warmup_iterations: int
     steady_iterations: int
+    warmup_converged: bool
+    steady_converged: bool
+    warmup_final_residual_norm: float
+    steady_final_residual_norm: float
+    gpu_memory_baseline_mib: float
+    gpu_memory_peak_mib: float
+    gpu_memory_peak_delta_mib: float
     cold_start_seconds: float
     assembly_seconds: float
     setup_seconds: float
@@ -110,6 +118,25 @@ def write_inline_quad(path: Path, size: int) -> None:
     )
 
 
+def gpu_memory_used_mib() -> float | None:
+    """Return total memory used across visible NVIDIA GPUs, when available."""
+    try:
+        output = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.used",
+                "--format=csv,noheader,nounits",
+            ],
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=5,
+        ).stdout
+        return sum(float(value.strip()) for value in output.splitlines() if value.strip())
+    except (FileNotFoundError, subprocess.SubprocessError, ValueError):
+        return None
+
+
 def run_once(
     executable: Path,
     case_dir: Path,
@@ -123,7 +150,12 @@ def run_once(
     extra_flags: tuple[str, ...] = (),
     save_solution: bool = False,
     dim: int = 2,
-) -> tuple[int, float, int, list[int], dict[str, float], list[float]]:
+    cg_relative_tolerance: float = 1e-12,
+    cg_max_iterations: int = 2000,
+) -> tuple[
+    int, float, int, list[int], bool, list[bool], float, list[float],
+    dict[str, float], list[float], float, float,
+]:
     if dim == 3:
         # ex1p generates the unit cube itself, so there is no serial mesh file
         # to write out and read back on every rank.
@@ -154,9 +186,33 @@ def run_once(
         mms,
         "-pr",
         str(repeats),
+        "-rtol",
+        str(cg_relative_tolerance),
+        "-max-it",
+        str(cg_max_iterations),
         *extra_flags,
     ]
-    process = subprocess.run(command, cwd=case_dir, text=True, capture_output=True)
+    baseline_memory = gpu_memory_used_mib() if device == "cuda" else None
+    peak_memory = baseline_memory
+    stop_sampling = threading.Event()
+
+    def sample_gpu_memory() -> None:
+        nonlocal peak_memory
+        while not stop_sampling.wait(0.05):
+            used = gpu_memory_used_mib()
+            if used is not None and (peak_memory is None or used > peak_memory):
+                peak_memory = used
+
+    sampler = None
+    if device == "cuda" and baseline_memory is not None:
+        sampler = threading.Thread(target=sample_gpu_memory, daemon=True)
+        sampler.start()
+    try:
+        process = subprocess.run(command, cwd=case_dir, text=True, capture_output=True)
+    finally:
+        stop_sampling.set()
+        if sampler is not None:
+            sampler.join()
     output = process.stdout + process.stderr
     if process.returncode:
         raise RuntimeError(
@@ -169,6 +225,23 @@ def run_once(
     steady_iterations = [
         int(value)
         for value in re.findall(r"Steady-state CG iterations: (\d+)", process.stdout)
+    ]
+    warmup_converged = re.search(
+        r"^CG converged: (yes|no)$", process.stdout, re.MULTILINE
+    )
+    steady_converged = re.findall(
+        r"^Steady-state CG converged: (yes|no)$", process.stdout, re.MULTILINE
+    )
+    warmup_residual = re.search(
+        r"^CG final residual norm: ([0-9.eE+-]+)$", process.stdout, re.MULTILINE
+    )
+    steady_residuals = [
+        float(value)
+        for value in re.findall(
+            r"^Steady-state CG final residual norm: ([0-9.eE+-]+)$",
+            process.stdout,
+            re.MULTILINE,
+        )
     ]
     labels = {
         "cold_start": "Cold start time",
@@ -189,9 +262,13 @@ def run_once(
         not dofs
         or not error
         or not warmup_iterations
+        or not warmup_converged
+        or not warmup_residual
         or len(timings) != len(labels)
         or len(steady_times) != repeats
         or len(steady_iterations) != repeats
+        or len(steady_converged) != repeats
+        or len(steady_residuals) != repeats
     ):
         raise RuntimeError(
             f"could not parse {dim}D {device}/{solver}, order={order}, "
@@ -202,8 +279,14 @@ def run_once(
         float(error.group(1)),
         int(warmup_iterations.group(1)),
         steady_iterations,
+        warmup_converged.group(1) == "yes",
+        [value == "yes" for value in steady_converged],
+        float(warmup_residual.group(1)),
+        steady_residuals,
         timings,
         steady_times,
+        baseline_memory if baseline_memory is not None else float("nan"),
+        peak_memory if peak_memory is not None else float("nan"),
     )
 
 
@@ -220,6 +303,8 @@ def profile_case(
     extra_flags: tuple[str, ...] = (),
     save_solution: bool = False,
     dim: int = 2,
+    cg_relative_tolerance: float = 1e-12,
+    cg_max_iterations: int = 2000,
 ) -> tuple[ProfileResult, list[tuple[int, float]]]:
     if dim not in (2, 3):
         raise ValueError(f"dim must be 2 or 3, got {dim}")
@@ -233,9 +318,22 @@ def profile_case(
         flush=True,
     )
 
-    dofs, l2_error, warmup_iterations, steady_iterations, timings, steady_times = run_once(
+    (
+        dofs,
+        l2_error,
+        warmup_iterations,
+        steady_iterations,
+        warmup_converged,
+        steady_converged,
+        warmup_residual,
+        steady_residuals,
+        timings,
+        steady_times,
+        gpu_memory_baseline,
+        gpu_memory_peak,
+    ) = run_once(
         executable, case_dir, mpi_ranks, device, solver, mms, order, size, repeats,
-        extra_flags, save_solution, dim,
+        extra_flags, save_solution, dim, cg_relative_tolerance, cg_max_iterations,
     )
     steady_solve = statistics.median(steady_times)
     solve_total = timings["warmup"] + steady_solve
@@ -258,6 +356,13 @@ def profile_case(
             l2_error=l2_error,
             warmup_iterations=warmup_iterations,
             steady_iterations=round(statistics.median(steady_iterations)),
+            warmup_converged=warmup_converged,
+            steady_converged=all(steady_converged),
+            warmup_final_residual_norm=warmup_residual,
+            steady_final_residual_norm=statistics.median(steady_residuals),
+            gpu_memory_baseline_mib=gpu_memory_baseline,
+            gpu_memory_peak_mib=gpu_memory_peak,
+            gpu_memory_peak_delta_mib=gpu_memory_peak - gpu_memory_baseline,
             cold_start_seconds=timings["cold_start"],
             assembly_seconds=timings["assembly"],
             setup_seconds=timings["setup"],

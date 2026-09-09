@@ -114,6 +114,8 @@ int main(int argc, char *argv[])
    bool l2_error = false;
    const char *mms = "sine";
    int profile_repeats = 0;
+   double cg_relative_tolerance = 1e-12;
+   int cg_max_iterations = 2000;
    // bool algebraic_ceed = false;
    bool algebraic_ceed = true;
    bool ceed_assembled_coarse_solver = false;
@@ -172,6 +174,10 @@ int main(int argc, char *argv[])
                   "Manufactured solution: sine, multimode, or bubble-exp.");
    args.AddOption(&profile_repeats, "-pr", "--profile-repeats",
                   "Number of additional same-process solves to profile.");
+   args.AddOption(&cg_relative_tolerance, "-rtol", "--relative-tolerance",
+                  "Relative tolerance for CG.");
+   args.AddOption(&cg_max_iterations, "-max-it", "--max-iterations",
+                  "Maximum number of CG iterations.");
    args.Parse();
    if (!args.Good())
    {
@@ -187,6 +193,15 @@ int main(int argc, char *argv[])
       if (myid == 0)
       {
          cerr << "Unknown manufactured solution: " << mms << endl;
+      }
+      return 1;
+   }
+   if (cg_relative_tolerance <= 0.0 || cg_max_iterations <= 0)
+   {
+      if (myid == 0)
+      {
+         cerr << "CG relative tolerance and maximum iterations must be positive."
+              << endl;
       }
       return 1;
    }
@@ -438,9 +453,9 @@ int main(int argc, char *argv[])
          prec = new HypreBoomerAMG;
       }
       CGSolver cg(MPI_COMM_WORLD);
-      cg.SetRelTol(1e-12);
-      cg.SetMaxIter(2000);
-      cg.SetPrintLevel(1);
+      cg.SetRelTol(cg_relative_tolerance);
+      cg.SetMaxIter(cg_max_iterations);
+      cg.SetPrintLevel(profile_repeats > 0 ? -1 : 1);
       if (prec)
       {
          cg.SetPreconditioner(*prec);
@@ -455,6 +470,9 @@ int main(int argc, char *argv[])
       if (myid == 0)
       {
          cout << "CG iterations: " << cg.GetNumIterations() << endl;
+         cout << "CG converged: " << (cg.GetConverged() ? "yes" : "no") << endl;
+         cout << "CG final residual norm: " << setprecision(16)
+              << cg.GetFinalNorm() << endl;
       }
       for (int repeat = 0; repeat < profile_repeats; repeat++)
       {
@@ -466,6 +484,10 @@ int main(int argc, char *argv[])
          if (myid == 0)
          {
             cout << "Steady-state CG iterations: " << cg.GetNumIterations() << endl;
+            cout << "Steady-state CG converged: "
+                 << (cg.GetConverged() ? "yes" : "no") << endl;
+            cout << "Steady-state CG final residual norm: " << setprecision(16)
+                 << cg.GetFinalNorm() << endl;
          }
       }
       delete prec;
